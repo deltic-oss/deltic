@@ -5,21 +5,21 @@
   "description": "Rich UID layer",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./uuid": {
-      "import": "./dist/uuid.js",
+      "import": "./dist/uuid.mjs",
       "require": "./dist/uuid.cjs",
-      "module-sync": "./dist/uuid.js",
+      "module-sync": "./dist/uuid.mjs",
       "types": "./dist/uuid.d.ts"
     },
     "./ulid": {
-      "import": "./dist/ulid.js",
+      "import": "./dist/ulid.mjs",
       "require": "./dist/ulid.cjs",
-      "module-sync": "./dist/ulid.js",
+      "module-sync": "./dist/ulid.mjs",
       "types": "./dist/ulid.d.ts"
     }
   },

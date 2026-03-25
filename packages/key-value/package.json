@@ -5,27 +5,27 @@
   "description": "A key-value store abstraction",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./memory": {
-      "import": "./dist/memory.js",
+      "import": "./dist/memory.mjs",
       "require": "./dist/memory.cjs",
-      "module-sync": "./dist/memory.js",
+      "module-sync": "./dist/memory.mjs",
       "types": "./dist/memory.d.ts"
     },
     "./pg": {
-      "import": "./dist/pg.js",
+      "import": "./dist/pg.mjs",
       "require": "./dist/pg.cjs",
-      "module-sync": "./dist/pg.js",
+      "module-sync": "./dist/pg.mjs",
       "types": "./dist/pg.d.ts"
     },
     "./pg-with-columns": {
-      "import": "./dist/pg-with-columns.js",
+      "import": "./dist/pg-with-columns.mjs",
       "require": "./dist/pg-with-columns.cjs",
-      "module-sync": "./dist/pg-with-columns.js",
+      "module-sync": "./dist/pg-with-columns.mjs",
       "types": "./dist/pg-with-columns.d.ts"
     }
   },

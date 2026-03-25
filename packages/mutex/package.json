@@ -5,39 +5,39 @@
   "description": "Contract based mutex, allowing key-based or global locks.",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./memory": {
-      "import": "./dist/memory.js",
+      "import": "./dist/memory.mjs",
       "require": "./dist/memory.cjs",
-      "module-sync": "./dist/memory.js",
+      "module-sync": "./dist/memory.mjs",
       "types": "./dist/memory.d.ts"
     },
     "./static-memory": {
-      "import": "./dist/static-memory.js",
+      "import": "./dist/static-memory.mjs",
       "require": "./dist/static-memory.cjs",
-      "module-sync": "./dist/static-memory.js",
+      "module-sync": "./dist/static-memory.mjs",
       "types": "./dist/static-memory.d.ts"
     },
     "./multi": {
-      "import": "./dist/multi.js",
+      "import": "./dist/multi.mjs",
       "require": "./dist/multi.cjs",
-      "module-sync": "./dist/multi.js",
+      "module-sync": "./dist/multi.mjs",
       "types": "./dist/multi.d.ts"
     },
     "./pg": {
-      "import": "./dist/pg.js",
+      "import": "./dist/pg.mjs",
       "require": "./dist/pg.cjs",
-      "module-sync": "./dist/pg.js",
+      "module-sync": "./dist/pg.mjs",
       "types": "./dist/pg.d.ts"
     },
     "./crc32-lock-id-converter": {
-      "import": "./dist/crc32-lock-id-converter.js",
+      "import": "./dist/crc32-lock-id-converter.mjs",
       "require": "./dist/crc32-lock-id-converter.cjs",
-      "module-sync": "./dist/crc32-lock-id-converter.js",
+      "module-sync": "./dist/crc32-lock-id-converter.mjs",
       "types": "./dist/crc32-lock-id-converter.d.ts"
     }
   },

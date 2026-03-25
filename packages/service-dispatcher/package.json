@@ -5,33 +5,33 @@
   "description": "A contract-based service abstraction",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./test-tooling": {
-      "import": "./dist/test-tooling.js",
+      "import": "./dist/test-tooling.mjs",
       "require": "./dist/test-tooling.cjs",
-      "module-sync": "./dist/test-tooling.js",
+      "module-sync": "./dist/test-tooling.mjs",
       "types": "./dist/test-tooling.d.ts"
     },
     "./aggregate-service-dispatcher": {
-      "import": "./dist/aggregate-service-dispatcher.js",
+      "import": "./dist/aggregate-service-dispatcher.mjs",
       "require": "./dist/aggregate-service-dispatcher.cjs",
-      "module-sync": "./dist/aggregate-service-dispatcher.js",
+      "module-sync": "./dist/aggregate-service-dispatcher.mjs",
       "types": "./dist/aggregate-service-dispatcher.d.ts"
     },
     "./locking-middleware": {
-      "import": "./dist/locking-middleware.js",
+      "import": "./dist/locking-middleware.mjs",
       "require": "./dist/locking-middleware.cjs",
-      "module-sync": "./dist/locking-middleware.js",
+      "module-sync": "./dist/locking-middleware.mjs",
       "types": "./dist/locking-middleware.d.ts"
     },
     "./locking-decorator": {
-      "import": "./dist/locking-decorator.js",
+      "import": "./dist/locking-decorator.mjs",
       "require": "./dist/locking-decorator.cjs",
-      "module-sync": "./dist/locking-decorator.js",
+      "module-sync": "./dist/locking-decorator.mjs",
       "types": "./dist/locking-decorator.d.ts"
     }
   },

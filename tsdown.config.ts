@@ -21,7 +21,7 @@ await Promise.all(
         const sourceFiles: string[] = [];
 
         for (const key in exportDeclarations) {
-            const sourceFile = exportDeclarations[key]['import'].replace('dist', 'src').replace('.js', '.ts');
+            const sourceFile = exportDeclarations[key]['import'].replace('dist', 'src').replace('.mjs', '.ts');
             sourceFiles.push(sourceFile);
             const destination = resolve(import.meta.dirname, 'packages', name, sourceFile);
 

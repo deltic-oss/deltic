@@ -5,21 +5,21 @@
   "description": "Various process queue implementations",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./concurrent": {
-      "import": "./dist/concurrent.js",
+      "import": "./dist/concurrent.mjs",
       "require": "./dist/concurrent.cjs",
-      "module-sync": "./dist/concurrent.js",
+      "module-sync": "./dist/concurrent.mjs",
       "types": "./dist/concurrent.d.ts"
     },
     "./partitioned": {
-      "import": "./dist/partitioned.js",
+      "import": "./dist/partitioned.mjs",
       "require": "./dist/partitioned.cjs",
-      "module-sync": "./dist/partitioned.js",
+      "module-sync": "./dist/partitioned.mjs",
       "types": "./dist/partitioned.d.ts"
     }
   },

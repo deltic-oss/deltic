@@ -5,21 +5,21 @@
   "description": "A strategy based back-off calculator",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./exponential": {
-      "import": "./dist/exponential.js",
+      "import": "./dist/exponential.mjs",
       "require": "./dist/exponential.cjs",
-      "module-sync": "./dist/exponential.js",
+      "module-sync": "./dist/exponential.mjs",
       "types": "./dist/exponential.d.ts"
     },
     "./linear": {
-      "import": "./dist/linear.js",
+      "import": "./dist/linear.mjs",
       "require": "./dist/linear.cjs",
-      "module-sync": "./dist/linear.js",
+      "module-sync": "./dist/linear.mjs",
       "types": "./dist/linear.d.ts"
     }
   },

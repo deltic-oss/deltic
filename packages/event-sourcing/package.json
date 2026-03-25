@@ -5,57 +5,57 @@
   "description": "A rich event-sourcing implementation",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./aggregate-projection": {
-      "import": "./dist/aggregate-projection.js",
+      "import": "./dist/aggregate-projection.mjs",
       "require": "./dist/aggregate-projection.cjs",
-      "module-sync": "./dist/aggregate-projection.js",
+      "module-sync": "./dist/aggregate-projection.mjs",
       "types": "./dist/aggregate-projection.d.ts"
     },
     "./using-reflect-metadata": {
-      "import": "./dist/using-reflect-metadata.js",
+      "import": "./dist/using-reflect-metadata.mjs",
       "require": "./dist/using-reflect-metadata.cjs",
-      "module-sync": "./dist/using-reflect-metadata.js",
+      "module-sync": "./dist/using-reflect-metadata.mjs",
       "types": "./dist/using-reflect-metadata.d.ts"
     },
     "./snapshotting": {
-      "import": "./dist/snapshotting.js",
+      "import": "./dist/snapshotting.mjs",
       "require": "./dist/snapshotting.cjs",
-      "module-sync": "./dist/snapshotting.js",
+      "module-sync": "./dist/snapshotting.mjs",
       "types": "./dist/snapshotting.d.ts"
     },
     "./test-tooling": {
-      "import": "./dist/test-tooling.js",
+      "import": "./dist/test-tooling.mjs",
       "require": "./dist/test-tooling.cjs",
-      "module-sync": "./dist/test-tooling.js",
+      "module-sync": "./dist/test-tooling.mjs",
       "types": "./dist/test-tooling.d.ts"
     },
     "./pg/snapshot-repository": {
-      "import": "./dist/pg/snapshot-repository.js",
+      "import": "./dist/pg/snapshot-repository.mjs",
       "require": "./dist/pg/snapshot-repository.cjs",
-      "module-sync": "./dist/pg/snapshot-repository.js",
+      "module-sync": "./dist/pg/snapshot-repository.mjs",
       "types": "./dist/pg/snapshot-repository.d.ts"
     },
     "./using-handler-map": {
-      "import": "./dist/using-handler-map.js",
+      "import": "./dist/using-handler-map.mjs",
       "require": "./dist/using-handler-map.cjs",
-      "module-sync": "./dist/using-handler-map.js",
+      "module-sync": "./dist/using-handler-map.mjs",
       "types": "./dist/using-handler-map.d.ts"
     },
     "./using-reducer-func": {
-      "import": "./dist/using-reducer-func.js",
+      "import": "./dist/using-reducer-func.mjs",
       "require": "./dist/using-reducer-func.cjs",
-      "module-sync": "./dist/using-reducer-func.js",
+      "module-sync": "./dist/using-reducer-func.mjs",
       "types": "./dist/using-reducer-func.d.ts"
     },
     "./using-reducer-map": {
-      "import": "./dist/using-reducer-map.js",
+      "import": "./dist/using-reducer-map.mjs",
       "require": "./dist/using-reducer-map.cjs",
-      "module-sync": "./dist/using-reducer-map.js",
+      "module-sync": "./dist/using-reducer-map.mjs",
       "types": "./dist/using-reducer-map.d.ts"
     }
   },

@@ -5,21 +5,21 @@
   "description": "General purpose offset tracking abstraction",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "module-sync": "./dist/index.js",
+      "module-sync": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
     "./pg": {
-      "import": "./dist/pg.js",
+      "import": "./dist/pg.mjs",
       "require": "./dist/pg.cjs",
-      "module-sync": "./dist/pg.js",
+      "module-sync": "./dist/pg.mjs",
       "types": "./dist/pg.d.ts"
     },
     "./memory": {
-      "import": "./dist/memory.js",
+      "import": "./dist/memory.mjs",
       "require": "./dist/memory.cjs",
-      "module-sync": "./dist/memory.js",
+      "module-sync": "./dist/memory.mjs",
       "types": "./dist/memory.d.ts"
     }
   },
