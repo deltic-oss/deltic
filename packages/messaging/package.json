@@ -8,211 +8,211 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     },
     "./decorating-message-consumer": {
       "import": "./dist/decorating-message-consumer.mjs",
       "require": "./dist/decorating-message-consumer.cjs",
       "module-sync": "./dist/decorating-message-consumer.mjs",
-      "types": "./dist/decorating-message-consumer.d.ts"
+      "types": "./dist/decorating-message-consumer.d.mts"
     },
     "./dispatching-message-consumer": {
       "import": "./dist/dispatching-message-consumer.mjs",
       "require": "./dist/dispatching-message-consumer.cjs",
       "module-sync": "./dist/dispatching-message-consumer.mjs",
-      "types": "./dist/dispatching-message-consumer.d.ts"
+      "types": "./dist/dispatching-message-consumer.d.mts"
     },
     "./decorating-message-dispatcher": {
       "import": "./dist/decorating-message-dispatcher.mjs",
       "require": "./dist/decorating-message-dispatcher.cjs",
       "module-sync": "./dist/decorating-message-dispatcher.mjs",
-      "types": "./dist/decorating-message-dispatcher.d.ts"
+      "types": "./dist/decorating-message-dispatcher.d.mts"
     },
     "./helpers": {
       "import": "./dist/helpers.mjs",
       "require": "./dist/helpers.cjs",
       "module-sync": "./dist/helpers.mjs",
-      "types": "./dist/helpers.d.ts"
+      "types": "./dist/helpers.d.mts"
     },
     "./upcasting": {
       "import": "./dist/upcasting.mjs",
       "require": "./dist/upcasting.cjs",
       "module-sync": "./dist/upcasting.mjs",
-      "types": "./dist/upcasting.d.ts"
+      "types": "./dist/upcasting.d.mts"
     },
     "./outbox": {
       "import": "./dist/outbox.mjs",
       "require": "./dist/outbox.cjs",
       "module-sync": "./dist/outbox.mjs",
-      "types": "./dist/outbox.d.ts"
+      "types": "./dist/outbox.d.mts"
     },
     "./message-consumer-chain": {
       "import": "./dist/message-consumer-chain.mjs",
       "require": "./dist/message-consumer-chain.cjs",
       "module-sync": "./dist/message-consumer-chain.mjs",
-      "types": "./dist/message-consumer-chain.d.ts"
+      "types": "./dist/message-consumer-chain.d.mts"
     },
     "./message-decorator-chain": {
       "import": "./dist/message-decorator-chain.mjs",
       "require": "./dist/message-decorator-chain.cjs",
       "module-sync": "./dist/message-decorator-chain.mjs",
-      "types": "./dist/message-decorator-chain.d.ts"
+      "types": "./dist/message-decorator-chain.d.mts"
     },
     "./message-dispatcher-chain": {
       "import": "./dist/message-dispatcher-chain.mjs",
       "require": "./dist/message-dispatcher-chain.cjs",
       "module-sync": "./dist/message-dispatcher-chain.mjs",
-      "types": "./dist/message-dispatcher-chain.d.ts"
+      "types": "./dist/message-dispatcher-chain.d.mts"
     },
     "./message-repository-using-memory": {
       "import": "./dist/message-repository-using-memory.mjs",
       "require": "./dist/message-repository-using-memory.cjs",
       "module-sync": "./dist/message-repository-using-memory.mjs",
-      "types": "./dist/message-repository-using-memory.d.ts"
+      "types": "./dist/message-repository-using-memory.d.mts"
     },
     "./collecting-message-dispatcher": {
       "import": "./dist/collecting-message-dispatcher.mjs",
       "require": "./dist/collecting-message-dispatcher.cjs",
       "module-sync": "./dist/collecting-message-dispatcher.mjs",
-      "types": "./dist/collecting-message-dispatcher.d.ts"
+      "types": "./dist/collecting-message-dispatcher.d.mts"
     },
     "./collecting-message-consumer": {
       "import": "./dist/collecting-message-consumer.mjs",
       "require": "./dist/collecting-message-consumer.cjs",
       "module-sync": "./dist/collecting-message-consumer.mjs",
-      "types": "./dist/collecting-message-consumer.d.ts"
+      "types": "./dist/collecting-message-consumer.d.mts"
     },
     "./consuming-message-dispatcher": {
       "import": "./dist/consuming-message-dispatcher.mjs",
       "require": "./dist/consuming-message-dispatcher.cjs",
       "module-sync": "./dist/consuming-message-dispatcher.mjs",
-      "types": "./dist/consuming-message-dispatcher.d.ts"
+      "types": "./dist/consuming-message-dispatcher.d.mts"
     },
     "./exactly-once-message-consumer-decorator": {
       "import": "./dist/exactly-once-message-consumer-decorator.mjs",
       "require": "./dist/exactly-once-message-consumer-decorator.cjs",
       "module-sync": "./dist/exactly-once-message-consumer-decorator.mjs",
-      "types": "./dist/exactly-once-message-consumer-decorator.d.ts"
+      "types": "./dist/exactly-once-message-consumer-decorator.d.mts"
     },
     "./pg/outbox-repository": {
       "import": "./dist/pg/outbox-repository.mjs",
       "require": "./dist/pg/outbox-repository.cjs",
       "module-sync": "./dist/pg/outbox-repository.mjs",
-      "types": "./dist/pg/outbox-repository.d.ts"
+      "types": "./dist/pg/outbox-repository.d.mts"
     },
     "./pg/message-repository": {
       "import": "./dist/pg/message-repository.mjs",
       "require": "./dist/pg/message-repository.cjs",
       "module-sync": "./dist/pg/message-repository.mjs",
-      "types": "./dist/pg/message-repository.d.ts"
+      "types": "./dist/pg/message-repository.d.mts"
     },
     "./pg/throttled-outbox-repository": {
       "import": "./dist/pg/throttled-outbox-repository.mjs",
       "require": "./dist/pg/throttled-outbox-repository.cjs",
       "module-sync": "./dist/pg/throttled-outbox-repository.mjs",
-      "types": "./dist/pg/throttled-outbox-repository.d.ts"
+      "types": "./dist/pg/throttled-outbox-repository.d.mts"
     },
     "./pg/delayed-outbox-repository": {
       "import": "./dist/pg/delayed-outbox-repository.mjs",
       "require": "./dist/pg/delayed-outbox-repository.cjs",
       "module-sync": "./dist/pg/delayed-outbox-repository.mjs",
-      "types": "./dist/pg/delayed-outbox-repository.d.ts"
+      "types": "./dist/pg/delayed-outbox-repository.d.mts"
     },
     "./pg/notifying-outbox-decorator": {
       "import": "./dist/pg/notifying-outbox-decorator.mjs",
       "require": "./dist/pg/notifying-outbox-decorator.cjs",
       "module-sync": "./dist/pg/notifying-outbox-decorator.mjs",
-      "types": "./dist/pg/notifying-outbox-decorator.d.ts"
+      "types": "./dist/pg/notifying-outbox-decorator.d.mts"
     },
     "./pg/outbox-relay-runner": {
       "import": "./dist/pg/outbox-relay-runner.mjs",
       "require": "./dist/pg/outbox-relay-runner.cjs",
       "module-sync": "./dist/pg/outbox-relay-runner.mjs",
-      "types": "./dist/pg/outbox-relay-runner.d.ts"
+      "types": "./dist/pg/outbox-relay-runner.d.mts"
     },
     "./pg/multi-outbox-relay-runner": {
       "import": "./dist/pg/multi-outbox-relay-runner.mjs",
       "require": "./dist/pg/multi-outbox-relay-runner.cjs",
       "module-sync": "./dist/pg/multi-outbox-relay-runner.mjs",
-      "types": "./dist/pg/multi-outbox-relay-runner.d.ts"
+      "types": "./dist/pg/multi-outbox-relay-runner.d.mts"
     },
     "./amqp/connection-provider": {
       "import": "./dist/amqp/connection-provider.mjs",
       "require": "./dist/amqp/connection-provider.cjs",
       "module-sync": "./dist/amqp/connection-provider.mjs",
-      "types": "./dist/amqp/connection-provider.d.ts"
+      "types": "./dist/amqp/connection-provider.d.mts"
     },
     "./amqp/channel-pool": {
       "import": "./dist/amqp/channel-pool.mjs",
       "require": "./dist/amqp/channel-pool.cjs",
       "module-sync": "./dist/amqp/channel-pool.mjs",
-      "types": "./dist/amqp/channel-pool.d.ts"
+      "types": "./dist/amqp/channel-pool.d.mts"
     },
     "./amqp/message-dispatcher": {
       "import": "./dist/amqp/message-dispatcher.mjs",
       "require": "./dist/amqp/message-dispatcher.cjs",
       "module-sync": "./dist/amqp/message-dispatcher.mjs",
-      "types": "./dist/amqp/message-dispatcher.d.ts"
+      "types": "./dist/amqp/message-dispatcher.d.mts"
     },
     "./amqp/message-relay": {
       "import": "./dist/amqp/message-relay.mjs",
       "require": "./dist/amqp/message-relay.cjs",
       "module-sync": "./dist/amqp/message-relay.mjs",
-      "types": "./dist/amqp/message-relay.d.ts"
+      "types": "./dist/amqp/message-relay.d.mts"
     },
     "./message-delivery-counter": {
       "import": "./dist/message-delivery-counter.mjs",
       "require": "./dist/message-delivery-counter.cjs",
       "module-sync": "./dist/message-delivery-counter.mjs",
-      "types": "./dist/message-delivery-counter.d.ts"
+      "types": "./dist/message-delivery-counter.d.mts"
     },
     "./context-message-decorator": {
       "import": "./dist/context-message-decorator.mjs",
       "require": "./dist/context-message-decorator.cjs",
       "module-sync": "./dist/context-message-decorator.mjs",
-      "types": "./dist/context-message-decorator.d.ts"
+      "types": "./dist/context-message-decorator.d.mts"
     },
     "./locking-message-consumer": {
       "import": "./dist/locking-message-consumer.mjs",
       "require": "./dist/locking-message-consumer.cjs",
       "module-sync": "./dist/locking-message-consumer.mjs",
-      "types": "./dist/locking-message-consumer.d.ts"
+      "types": "./dist/locking-message-consumer.d.mts"
     },
     "./run-message-consumer-in-context": {
       "import": "./dist/run-message-consumer-in-context.mjs",
       "require": "./dist/run-message-consumer-in-context.cjs",
       "module-sync": "./dist/run-message-consumer-in-context.mjs",
-      "types": "./dist/run-message-consumer-in-context.d.ts"
+      "types": "./dist/run-message-consumer-in-context.d.mts"
     },
     "./decorator-for-event-ids": {
       "import": "./dist/decorator-for-event-ids.mjs",
       "require": "./dist/decorator-for-event-ids.cjs",
       "module-sync": "./dist/decorator-for-event-ids.mjs",
-      "types": "./dist/decorator-for-event-ids.d.ts"
+      "types": "./dist/decorator-for-event-ids.d.mts"
     },
     "./reducing-message-consumer": {
       "import": "./dist/reducing-message-consumer.mjs",
       "require": "./dist/reducing-message-consumer.cjs",
       "module-sync": "./dist/reducing-message-consumer.mjs",
-      "types": "./dist/reducing-message-consumer.d.ts"
+      "types": "./dist/reducing-message-consumer.d.mts"
     },
     "./sequential-message-consumer": {
       "import": "./dist/sequential-message-consumer.mjs",
       "require": "./dist/sequential-message-consumer.cjs",
       "module-sync": "./dist/sequential-message-consumer.mjs",
-      "types": "./dist/sequential-message-consumer.d.ts"
+      "types": "./dist/sequential-message-consumer.d.mts"
     },
     "./tenant-id-decorator": {
       "import": "./dist/tenant-id-decorator.mjs",
       "require": "./dist/tenant-id-decorator.cjs",
       "module-sync": "./dist/tenant-id-decorator.mjs",
-      "types": "./dist/tenant-id-decorator.d.ts"
+      "types": "./dist/tenant-id-decorator.d.mts"
     },
     "./tenant-scoping-message-consumer": {
       "import": "./dist/tenant-scoping-message-consumer.mjs",
       "require": "./dist/tenant-scoping-message-consumer.cjs",
       "module-sync": "./dist/tenant-scoping-message-consumer.mjs",
-      "types": "./dist/tenant-scoping-message-consumer.d.ts"
+      "types": "./dist/tenant-scoping-message-consumer.d.mts"
     }
   },
   "keywords": [

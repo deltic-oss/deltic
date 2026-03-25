@@ -8,37 +8,37 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     },
     "./memory": {
       "import": "./dist/memory.mjs",
       "require": "./dist/memory.cjs",
       "module-sync": "./dist/memory.mjs",
-      "types": "./dist/memory.d.ts"
+      "types": "./dist/memory.d.mts"
     },
     "./static-memory": {
       "import": "./dist/static-memory.mjs",
       "require": "./dist/static-memory.cjs",
       "module-sync": "./dist/static-memory.mjs",
-      "types": "./dist/static-memory.d.ts"
+      "types": "./dist/static-memory.d.mts"
     },
     "./multi": {
       "import": "./dist/multi.mjs",
       "require": "./dist/multi.cjs",
       "module-sync": "./dist/multi.mjs",
-      "types": "./dist/multi.d.ts"
+      "types": "./dist/multi.d.mts"
     },
     "./pg": {
       "import": "./dist/pg.mjs",
       "require": "./dist/pg.cjs",
       "module-sync": "./dist/pg.mjs",
-      "types": "./dist/pg.d.ts"
+      "types": "./dist/pg.d.mts"
     },
     "./crc32-lock-id-converter": {
       "import": "./dist/crc32-lock-id-converter.mjs",
       "require": "./dist/crc32-lock-id-converter.cjs",
       "module-sync": "./dist/crc32-lock-id-converter.mjs",
-      "types": "./dist/crc32-lock-id-converter.d.ts"
+      "types": "./dist/crc32-lock-id-converter.d.mts"
     }
   },
   "keywords": [

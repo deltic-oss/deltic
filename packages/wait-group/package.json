@@ -8,7 +8,7 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     }
   },
   "scripts": {},

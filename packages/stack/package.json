@@ -9,31 +9,31 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     },
     "./memory": {
       "import": "./dist/memory.mjs",
       "require": "./dist/memory.cjs",
       "module-sync": "./dist/memory.mjs",
-      "types": "./dist/memory.d.ts"
+      "types": "./dist/memory.d.mts"
     },
     "./pg": {
       "import": "./dist/pg.mjs",
       "require": "./dist/pg.cjs",
       "module-sync": "./dist/pg.mjs",
-      "types": "./dist/pg.d.ts"
+      "types": "./dist/pg.d.mts"
     },
     "./rabbitmq": {
       "import": "./dist/rabbitmq.mjs",
       "require": "./dist/rabbitmq.cjs",
       "module-sync": "./dist/rabbitmq.mjs",
-      "types": "./dist/rabbitmq.d.ts"
+      "types": "./dist/rabbitmq.d.mts"
     },
     "./outbox-relay": {
       "import": "./dist/outbox-relay.mjs",
       "require": "./dist/outbox-relay.cjs",
       "module-sync": "./dist/outbox-relay.mjs",
-      "types": "./dist/outbox-relay.d.ts"
+      "types": "./dist/outbox-relay.d.mts"
     }
   },
   "keywords": [

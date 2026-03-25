@@ -8,55 +8,55 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     },
     "./aggregate-projection": {
       "import": "./dist/aggregate-projection.mjs",
       "require": "./dist/aggregate-projection.cjs",
       "module-sync": "./dist/aggregate-projection.mjs",
-      "types": "./dist/aggregate-projection.d.ts"
+      "types": "./dist/aggregate-projection.d.mts"
     },
     "./using-reflect-metadata": {
       "import": "./dist/using-reflect-metadata.mjs",
       "require": "./dist/using-reflect-metadata.cjs",
       "module-sync": "./dist/using-reflect-metadata.mjs",
-      "types": "./dist/using-reflect-metadata.d.ts"
+      "types": "./dist/using-reflect-metadata.d.mts"
     },
     "./snapshotting": {
       "import": "./dist/snapshotting.mjs",
       "require": "./dist/snapshotting.cjs",
       "module-sync": "./dist/snapshotting.mjs",
-      "types": "./dist/snapshotting.d.ts"
+      "types": "./dist/snapshotting.d.mts"
     },
     "./test-tooling": {
       "import": "./dist/test-tooling.mjs",
       "require": "./dist/test-tooling.cjs",
       "module-sync": "./dist/test-tooling.mjs",
-      "types": "./dist/test-tooling.d.ts"
+      "types": "./dist/test-tooling.d.mts"
     },
     "./pg/snapshot-repository": {
       "import": "./dist/pg/snapshot-repository.mjs",
       "require": "./dist/pg/snapshot-repository.cjs",
       "module-sync": "./dist/pg/snapshot-repository.mjs",
-      "types": "./dist/pg/snapshot-repository.d.ts"
+      "types": "./dist/pg/snapshot-repository.d.mts"
     },
     "./using-handler-map": {
       "import": "./dist/using-handler-map.mjs",
       "require": "./dist/using-handler-map.cjs",
       "module-sync": "./dist/using-handler-map.mjs",
-      "types": "./dist/using-handler-map.d.ts"
+      "types": "./dist/using-handler-map.d.mts"
     },
     "./using-reducer-func": {
       "import": "./dist/using-reducer-func.mjs",
       "require": "./dist/using-reducer-func.cjs",
       "module-sync": "./dist/using-reducer-func.mjs",
-      "types": "./dist/using-reducer-func.d.ts"
+      "types": "./dist/using-reducer-func.d.mts"
     },
     "./using-reducer-map": {
       "import": "./dist/using-reducer-map.mjs",
       "require": "./dist/using-reducer-map.cjs",
       "module-sync": "./dist/using-reducer-map.mjs",
-      "types": "./dist/using-reducer-map.d.ts"
+      "types": "./dist/using-reducer-map.d.mts"
     }
   },
   "keywords": [

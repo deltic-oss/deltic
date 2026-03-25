@@ -8,19 +8,19 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     },
     "./concurrent": {
       "import": "./dist/concurrent.mjs",
       "require": "./dist/concurrent.cjs",
       "module-sync": "./dist/concurrent.mjs",
-      "types": "./dist/concurrent.d.ts"
+      "types": "./dist/concurrent.d.mts"
     },
     "./partitioned": {
       "import": "./dist/partitioned.mjs",
       "require": "./dist/partitioned.cjs",
       "module-sync": "./dist/partitioned.mjs",
-      "types": "./dist/partitioned.d.ts"
+      "types": "./dist/partitioned.d.mts"
     }
   },
   "scripts": {

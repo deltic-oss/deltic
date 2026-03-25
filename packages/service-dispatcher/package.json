@@ -8,31 +8,31 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     },
     "./test-tooling": {
       "import": "./dist/test-tooling.mjs",
       "require": "./dist/test-tooling.cjs",
       "module-sync": "./dist/test-tooling.mjs",
-      "types": "./dist/test-tooling.d.ts"
+      "types": "./dist/test-tooling.d.mts"
     },
     "./aggregate-service-dispatcher": {
       "import": "./dist/aggregate-service-dispatcher.mjs",
       "require": "./dist/aggregate-service-dispatcher.cjs",
       "module-sync": "./dist/aggregate-service-dispatcher.mjs",
-      "types": "./dist/aggregate-service-dispatcher.d.ts"
+      "types": "./dist/aggregate-service-dispatcher.d.mts"
     },
     "./locking-middleware": {
       "import": "./dist/locking-middleware.mjs",
       "require": "./dist/locking-middleware.cjs",
       "module-sync": "./dist/locking-middleware.mjs",
-      "types": "./dist/locking-middleware.d.ts"
+      "types": "./dist/locking-middleware.d.mts"
     },
     "./locking-decorator": {
       "import": "./dist/locking-decorator.mjs",
       "require": "./dist/locking-decorator.cjs",
       "module-sync": "./dist/locking-decorator.mjs",
-      "types": "./dist/locking-decorator.d.ts"
+      "types": "./dist/locking-decorator.d.mts"
     }
   },
   "keywords": [

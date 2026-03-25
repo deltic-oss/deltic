@@ -8,19 +8,19 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
       "module-sync": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts"
     },
     "./exponential": {
       "import": "./dist/exponential.mjs",
       "require": "./dist/exponential.cjs",
       "module-sync": "./dist/exponential.mjs",
-      "types": "./dist/exponential.d.ts"
+      "types": "./dist/exponential.d.mts"
     },
     "./linear": {
       "import": "./dist/linear.mjs",
       "require": "./dist/linear.cjs",
       "module-sync": "./dist/linear.mjs",
-      "types": "./dist/linear.d.ts"
+      "types": "./dist/linear.d.mts"
     }
   },
   "keywords": [
