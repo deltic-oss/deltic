@@ -83,7 +83,7 @@ describe('functionality', () => {
         const clock = createTestClock(); // or use GlobalTestClock
         const now = clock.now();
 
-        expect(timestampLabel('label')).toEqual('label-${now}');
+        expect(timestampLabel('label')).toEqual(`label-${now}`);
     });
 
     test('it works with a set timestamp', () => {

@@ -124,7 +124,7 @@ these dependencies from always being constructed.
 
 Dependencies can explicitly be lazy, which delays construction until they are actually used.
 
-Eithe use the `lazy: true` setting:
+Either use the `lazy: true` setting:
 
 ```typescript
 import {container, ServiceKey} from '@deltic/dependency-injection';

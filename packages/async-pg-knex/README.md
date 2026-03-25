@@ -75,7 +75,7 @@ const [newUser] = await db.connection()
 // UPDATE
 await db.connection()
     .update('users')
-    .yp('id', userId)
+    .where('id', userId)
     .update({last_login: new Date()});
 
 // DELETE
