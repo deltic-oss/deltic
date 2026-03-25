@@ -3,6 +3,7 @@ export interface TransactionManager {
     inTransaction(): boolean;
     runInIsolation<R>(fn: () => Promise<R>): Promise<R>;
     runInTransaction<R>(fn: () => Promise<R>): Promise<R>;
+    runInIsolatedTransaction<R>(fn: () => Promise<R>): Promise<R>;
     commit(): Promise<void>;
     rollback(error?: unknown): Promise<void>;
 }
@@ -23,6 +24,10 @@ export class NoopTransactionManager implements TransactionManager {
     }
 
     runInIsolation<R>(fn: () => Promise<R>): Promise<R> {
+        return fn();
+    }
+
+    runInIsolatedTransaction<R>(fn: () => Promise<R>): Promise<R> {
         return fn();
     }
 }

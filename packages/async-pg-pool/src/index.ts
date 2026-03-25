@@ -101,6 +101,12 @@ export class AsyncPgPool {
         });
     }
 
+    async runInIsolatedTransaction<R>(fn: () => Promise<R>): Promise<R> {
+        return this.runInIsolation(async () => {
+            return this.runInTransaction(fn);
+        });
+    }
+
     async primary(): Promise<Connection> {
         const context = this.resolveTransactionContext();
         await context.exclusiveAccess.lock();
@@ -418,5 +424,9 @@ export class TransactionManagerUsingPg implements TransactionManager {
 
     runInTransaction<R>(fn: () => Promise<R>): Promise<R> {
         return this.pool.runInTransaction(fn);
+    }
+
+    runInIsolatedTransaction<R>(fn: () => Promise<R>): Promise<R> {
+        return this.pool.runInIsolatedTransaction(fn);
     }
 }

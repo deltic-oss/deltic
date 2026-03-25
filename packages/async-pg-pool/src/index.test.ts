@@ -232,7 +232,7 @@ describe('AsyncPgPool', () => {
         expect(released).toEqual(true);
     });
 
-    test('run() creates an isolated transaction context scope', async () => {
+    test('runInIsolation() creates an isolated transaction context scope', async () => {
         const context = composeContextSlots([transactionContextSlot], new AsyncLocalStorage());
 
         const provider = new AsyncPgPool(pool, {}, context);
@@ -243,6 +243,20 @@ describe('AsyncPgPool', () => {
             await provider.runInTransaction(async () => {
                 innerInTransaction = provider.inTransaction();
             });
+        });
+
+        expect(innerInTransaction).toEqual(true);
+    });
+
+    test('runInIsolatedTransaction() creates an isolated transaction context scope', async () => {
+        const context = composeContextSlots([transactionContextSlot], new AsyncLocalStorage());
+
+        const provider = new AsyncPgPool(pool, {}, context);
+
+        let innerInTransaction = false;
+
+        await provider.runInIsolatedTransaction(async () => {
+            innerInTransaction = provider.inTransaction();
         });
 
         expect(innerInTransaction).toEqual(true);
