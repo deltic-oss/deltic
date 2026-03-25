@@ -3,7 +3,6 @@
   "type": "module",
   "packageManager": "pnpm@10.22.0",
   "scripts": {
-    "prepublish": "build",
     "clean": "rm -rf ./packages/*/dist",
     "test": "vitest run",
     "build": "tsdown",
