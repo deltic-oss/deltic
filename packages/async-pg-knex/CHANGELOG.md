@@ -1,5 +1,13 @@
 # @deltic/async-pg-knex
 
+## 0.1.1
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+- Updated dependencies [76018d6]
+  - @deltic/async-pg-pool@0.2.1
+
 ## 0.1.0
 
 ### Minor Changes

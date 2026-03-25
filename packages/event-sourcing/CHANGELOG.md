@@ -1,5 +1,19 @@
 # @deltic/event-sourcing
 
+## 0.1.1
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+- Updated dependencies [76018d6]
+  - @deltic/transaction-manager@0.1.1
+  - @deltic/service-dispatcher@0.2.1
+  - @deltic/async-pg-pool@0.2.1
+  - @deltic/messaging@0.1.1
+  - @deltic/context@0.1.1
+  - @deltic/clock@0.1.2
+  - @deltic/uid@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @deltic/wait-group
 
+## 0.1.3
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+
 ## 0.1.2
 
 ### Patch Changes

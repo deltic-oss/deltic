@@ -1,7 +1,7 @@
 {
   "name": "@deltic/error-standard",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A standard error that adds error codes, context, and previous errors.",
   "exports": {
     ".": {

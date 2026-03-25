@@ -1,5 +1,14 @@
 # @deltic/key-value
 
+## 0.1.1
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+- Updated dependencies [76018d6]
+  - @deltic/context@0.1.1
+  - @deltic/uid@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes

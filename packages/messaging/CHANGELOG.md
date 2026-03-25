@@ -1,5 +1,21 @@
 # @deltic/messaging
 
+## 0.1.1
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+- Updated dependencies [76018d6]
+  - @deltic/offset-tracking@0.1.1
+  - @deltic/async-pg-pool@0.2.1
+  - @deltic/process-queue@0.1.1
+  - @deltic/wait-group@0.1.3
+  - @deltic/key-value@0.1.1
+  - @deltic/backoff@0.1.2
+  - @deltic/context@0.1.1
+  - @deltic/clock@0.1.2
+  - @deltic/mutex@0.1.2
+
 ## 0.1.0
 
 ### Minor Changes

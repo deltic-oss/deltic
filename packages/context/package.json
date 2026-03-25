@@ -1,7 +1,7 @@
 {
   "name": "@deltic/context",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Context tracking for async processes",
   "exports": {
     ".": {
@@ -11,7 +11,12 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "keywords": ["context", "async-context", "async-local-storage", "scoping"],
+  "keywords": [
+    "context",
+    "async-context",
+    "async-local-storage",
+    "scoping"
+  ],
   "author": "Frank de Jonge (https://frankdejonge.nl)",
   "license": "ISC",
   "packageManager": "pnpm@10.12.4",

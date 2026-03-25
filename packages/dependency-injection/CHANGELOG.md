@@ -1,5 +1,11 @@
 # @deltic/dependency-injection
 
+## 0.3.1
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+
 ## 0.3.0
 
 ### Minor Changes

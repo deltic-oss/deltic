@@ -1,5 +1,18 @@
 # @deltic/stack
 
+## 1.0.1
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+- Updated dependencies [76018d6]
+  - @deltic/dependency-injection@0.3.1
+  - @deltic/transaction-manager@0.1.1
+  - @deltic/event-sourcing@0.1.1
+  - @deltic/async-pg-pool@0.2.1
+  - @deltic/messaging@0.1.1
+  - @deltic/mutex@0.1.2
+
 ## 1.0.0
 
 ### Minor Changes

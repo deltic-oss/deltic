@@ -1,5 +1,14 @@
 # @deltic/service-dispatcher
 
+## 0.2.1
+
+### Patch Changes
+
+- 76018d6: Fix package.json export dist references
+- Updated dependencies [76018d6]
+  - @deltic/event-sourcing@0.1.1
+  - @deltic/mutex@0.1.2
+
 ## 0.2.0
 
 ### Minor Changes

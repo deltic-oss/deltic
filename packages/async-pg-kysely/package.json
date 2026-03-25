@@ -1,7 +1,7 @@
 {
   "name": "@deltic/async-pg-kysely",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Kysely query builder integration with @deltic/async-pg-pool",
   "exports": {
     ".": {
