@@ -1,5 +1,18 @@
 # @deltic/stack
 
+## 1.0.2
+
+### Patch Changes
+
+- 0ed7f15: Fix type references in the dist folder.
+- Updated dependencies [0ed7f15]
+  - @deltic/dependency-injection@0.3.2
+  - @deltic/transaction-manager@0.1.2
+  - @deltic/event-sourcing@0.1.2
+  - @deltic/async-pg-pool@0.2.2
+  - @deltic/messaging@0.1.2
+  - @deltic/mutex@0.1.3
+
 ## 1.0.1
 
 ### Patch Changes

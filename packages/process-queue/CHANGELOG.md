@@ -1,5 +1,13 @@
 # @deltic/process-queue
 
+## 0.1.2
+
+### Patch Changes
+
+- 0ed7f15: Fix type references in the dist folder.
+- Updated dependencies [0ed7f15]
+  - @deltic/wait-group@0.1.4
+
 ## 0.1.1
 
 ### Patch Changes

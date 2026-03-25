@@ -1,5 +1,11 @@
 # @deltic/dependency-injection
 
+## 0.3.2
+
+### Patch Changes
+
+- 0ed7f15: Fix type references in the dist folder.
+
 ## 0.3.1
 
 ### Patch Changes

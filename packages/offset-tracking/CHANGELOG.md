@@ -1,5 +1,11 @@
 # @deltic/offset-tracking
 
+## 0.1.2
+
+### Patch Changes
+
+- 0ed7f15: Fix type references in the dist folder.
+
 ## 0.1.1
 
 ### Patch Changes

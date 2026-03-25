@@ -1,5 +1,11 @@
 # @deltic/wait-group
 
+## 0.1.4
+
+### Patch Changes
+
+- 0ed7f15: Fix type references in the dist folder.
+
 ## 0.1.3
 
 ### Patch Changes

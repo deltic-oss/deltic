@@ -1,5 +1,19 @@
 # @deltic/event-sourcing
 
+## 0.1.2
+
+### Patch Changes
+
+- 0ed7f15: Fix type references in the dist folder.
+- Updated dependencies [0ed7f15]
+  - @deltic/transaction-manager@0.1.2
+  - @deltic/service-dispatcher@0.2.2
+  - @deltic/async-pg-pool@0.2.2
+  - @deltic/messaging@0.1.2
+  - @deltic/context@0.1.2
+  - @deltic/clock@0.1.3
+  - @deltic/uid@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes

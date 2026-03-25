@@ -1,5 +1,14 @@
 # @deltic/async-pg-kysely
 
+## 0.1.2
+
+### Patch Changes
+
+- 0ed7f15: Fix type references in the dist folder.
+- Updated dependencies [0ed7f15]
+  - @deltic/error-standard@0.1.3
+  - @deltic/async-pg-pool@0.2.2
+
 ## 0.1.1
 
 ### Patch Changes
