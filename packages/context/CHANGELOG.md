@@ -1,5 +1,11 @@
 # @deltic/context
 
+## 0.1.3
+
+### Patch Changes
+
+- Added Reader and Writer interfaces to reference a read-only use-case of the Context class.
+
 ## 0.1.2
 
 ### Patch Changes

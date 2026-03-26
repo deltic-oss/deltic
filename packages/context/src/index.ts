@@ -54,7 +54,16 @@ export interface ContextRunner<C extends ContextData<C>> {
     run<R>(fn: () => Promise<R>, context?: Partial<C>): Promise<R>;
 }
 
-export class Context<C extends ContextData<C>> {
+export interface ContextWriter<C extends ContextData<C>> {
+    attach(context: Partial<C>): void;
+}
+
+export interface ContextReader<C extends ContextData<C>> {
+    context(): Partial<C>;
+    get<K extends keyof C>(key: K): C[K] | undefined;
+}
+
+export class Context<C extends ContextData<C>> implements ContextRunner<C>, ContextReader<C>, ContextWriter<C>{
     constructor(
         private readonly storage: ContextStore<Partial<C>>,
         private readonly createContextValue: ContextValueCreator<C> = defaultContextValueCreator,
