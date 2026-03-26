@@ -1,5 +1,12 @@
 # @deltic/context
 
+## 0.1.4
+
+### Patch Changes
+
+- Add ContextOperator which is a ReadWriter and a Runner.
+- Add ContextReadWriter
+
 ## 0.1.3
 
 ### Patch Changes

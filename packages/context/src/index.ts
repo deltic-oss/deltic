@@ -16,11 +16,13 @@ export type ContextData<C> = {
  */
 export interface ContextStore<C extends ContextData<C>> {
     getStore(): Partial<C> | undefined;
+
     run<R>(store: Partial<C>, callback: () => Promise<R>): Promise<R>;
 }
 
 export class ContextStoreUsingMemory<C extends ContextData<C>> implements ContextStore<C> {
-    constructor(private context: Partial<C> = {}) {}
+    constructor(private context: Partial<C> = {}) {
+    }
 
     getStore(): Partial<C> | undefined {
         return this.context;
@@ -60,14 +62,22 @@ export interface ContextWriter<C extends ContextData<C>> {
 
 export interface ContextReader<C extends ContextData<C>> {
     context(): Partial<C>;
+
     get<K extends keyof C>(key: K): C[K] | undefined;
 }
 
-export class Context<C extends ContextData<C>> implements ContextRunner<C>, ContextReader<C>, ContextWriter<C>{
+export interface ContextReadWriter<C extends ContextData<C>> extends ContextReader<C>, ContextWriter<C> {
+}
+
+export interface ContextOperator<C extends ContextData<C>> extends ContextRunner<C>, ContextReadWriter<C> {
+}
+
+export class Context<C extends ContextData<C>> implements ContextOperator<C> {
     constructor(
         private readonly storage: ContextStore<Partial<C>>,
         private readonly createContextValue: ContextValueCreator<C> = defaultContextValueCreator,
-    ) {}
+    ) {
+    }
 
     async run<R>(fn: () => Promise<R>, context: Partial<C> = {}): Promise<R> {
         const inherited = this.storage.getStore() ?? {};
@@ -98,17 +108,21 @@ export class Context<C extends ContextData<C>> implements ContextRunner<C>, Cont
 
 export interface ValueReader<Value> {
     resolve(): Value | undefined;
+
     mustResolve(): Value;
+
     preventMismatch(value: Value): void;
 }
 
 export interface ValueReadWriter<Value> extends ValueReader<Value> {
     use(context?: Value): void;
+
     forget(): void;
 }
 
 export class ValueReadWriterUsingMemory<Value extends string | number> implements ValueReadWriter<Value> {
-    constructor(private value?: Value) {}
+    constructor(private value?: Value) {
+    }
 
     resolve(): Value | undefined {
         return this.value;
@@ -146,7 +160,8 @@ export class ValueReadWriterUsingContext<
     constructor(
         private readonly context: Context<KeyValueToObject<Key, Value>>,
         private readonly key: Key,
-    ) {}
+    ) {
+    }
 
     forget(): void {
         this.use(undefined);
@@ -196,7 +211,7 @@ export class ContextMismatchDetected extends StandardError {
     static for<Value extends string | number>(
         expected: Value,
         actual: Value,
-    ){
+    ) {
         return new ContextMismatchDetected(
             `Context mismatch operation detected. Expected ${String(expected)} detected ${String(actual)}`,
             'context.mismatch_detected',
@@ -214,7 +229,9 @@ export class ContextMismatchDetected extends StandardError {
  */
 export interface ContextSlot<Key extends string, Value> {
     readonly key: Key;
+
     defaultValue?(): Value;
+
     readonly inherited: boolean;
 }
 
