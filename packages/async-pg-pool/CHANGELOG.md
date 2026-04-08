@@ -1,5 +1,11 @@
 # @deltic/async-pg-pool
 
+## 0.2.3
+
+### Patch Changes
+
+- Prevent concurrent begin deadlock.
+
 ## 0.2.2
 
 ### Patch Changes

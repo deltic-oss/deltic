@@ -1,7 +1,7 @@
 {
   "name": "@deltic/async-pg-pool",
   "type": "module",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "An opinionated interface to acquire connections from Postgres",
   "exports": {
     ".": {

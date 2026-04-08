@@ -51,15 +51,14 @@
   "author": "Frank de Jonge (https://frankdejonge.nl)",
   "license": "ISC",
   "packageManager": "pnpm@10.12.4",
-  "dependencies": {},
   "devDependencies": {
-    "pg": "^8.16.3",
-    "@types/pg": "^8.15.6",
-    "crc": "^4.3.2"
+    "@types/pg": "^8.20.0",
+    "crc": "^4.3.2",
+    "pg": "^8.20.0"
   },
   "peerDependencies": {
-    "pg": "^8.16.3",
-    "crc": "^4.3.2"
+    "crc": "^4.3.2",
+    "pg": "^8.16.3"
   },
   "peerDependenciesMeta": {
     "pg": {

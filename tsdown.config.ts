@@ -39,10 +39,12 @@ await Promise.all(
 export default packageDirectories.map(dirname => {
     return defineConfig({
         dts: true,
+        deps: {
+            neverBundle: [/^@deltic\//],
+            skipNodeModulesBundle: true,
+        },
         format: ['esm', 'cjs'],
-        external: [/^@deltic\//],
         alias: aliases,
-        skipNodeModulesBundle: true,
         entry: sources[dirname] ?? [],
         outDir: resolve(import.meta.dirname, `packages/${dirname}/dist`),
         platform: 'node',

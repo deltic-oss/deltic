@@ -1,5 +1,13 @@
 # @deltic/service-dispatcher
 
+## 0.2.3
+
+### Patch Changes
+
+- Upgraded fast-equals
+- Updated dependencies
+  - @deltic/event-sourcing@0.1.3
+
 ## 0.2.2
 
 ### Patch Changes

@@ -46,14 +46,14 @@
     "directory": "packages/key-value"
   },
   "peerDependencies": {
-    "object-hash": "^3.0.0",
-    "pg": "^8.16.3",
     "@deltic/context": "workspace:^",
-    "@deltic/uid": "workspace:^"
+    "@deltic/uid": "workspace:^",
+    "object-hash": "^3.0.0",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/object-hash": "^3.0.6",
-    "@types/pg": "^8.15.6",
+    "@types/pg": "^8.20.0",
     "uuid": "^13.0.0"
   },
   "peerDependenciesMeta": {

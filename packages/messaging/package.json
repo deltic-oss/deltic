@@ -234,8 +234,8 @@
     "directory": "packages/messaging"
   },
   "peerDependencies": {
-    "@deltic/backoff": "workspace:^",
     "@deltic/async-pg-pool": "workspace:^",
+    "@deltic/backoff": "workspace:^",
     "@deltic/clock": "workspace:^",
     "@deltic/context": "workspace:^",
     "@deltic/key-value": "workspace:^",
@@ -248,8 +248,8 @@
     "pg": "^8.16.3"
   },
   "devDependencies": {
-    "@deltic/backoff": "workspace:^",
     "@deltic/async-pg-pool": "workspace:^",
+    "@deltic/backoff": "workspace:^",
     "@deltic/clock": "workspace:^",
     "@deltic/context": "workspace:^",
     "@deltic/error-standard": "workspace:^",
@@ -258,11 +258,11 @@
     "@deltic/offset-tracking": "workspace:^",
     "@deltic/process-queue": "workspace:^",
     "@deltic/wait-group": "workspace:^",
-    "amqplib": "^0.10.7",
-    "@types/amqplib": "^0.10.7",
+    "@types/amqplib": "^0.10.8",
+    "@types/pg": "^8.20.0",
+    "amqplib": "^1.0.3",
     "crc": "^4.3.2",
-    "pg": "^8.16.3",
-    "@types/pg": "^8.15.6",
+    "pg": "^8.20.0",
     "uuid": "^13.0.0"
   },
   "peerDependenciesMeta": {

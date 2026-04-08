@@ -1,5 +1,16 @@
 # @deltic/stack
 
+## 2.0.0
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @deltic/async-pg-pool@0.2.3
+  - @deltic/dependency-injection@0.4.0
+  - @deltic/event-sourcing@0.1.3
+
 ## 1.0.2
 
 ### Patch Changes

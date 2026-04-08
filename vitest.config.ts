@@ -1,10 +1,9 @@
 import {defineConfig} from 'vitest/config';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import {join} from 'node:path';
 
 export default defineConfig({
-    plugins: [tsconfigPaths()],
     resolve: {
+        tsconfigPaths: true,
         alias: [
             {
                 find: '@deltic/mutex/static-memory',
@@ -20,7 +19,7 @@ export default defineConfig({
         retry: 3,
         logHeapUsage: true,
         testTimeout: 10_000,
-        // include: ['packages/*/src/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+        include: ['packages/*/src/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
         globals: true,
         clearMocks: false,
         env: {
@@ -48,7 +47,7 @@ export default defineConfig({
         // setupFiles: ['dotenv/config'],
 
         // pool: 'threads',
-        // isolate: false,
+        isolate: false,
         // profiling
         // pool: 'forks',
         // poolOptions: {

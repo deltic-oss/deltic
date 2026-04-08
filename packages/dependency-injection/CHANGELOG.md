@@ -1,5 +1,11 @@
 # @deltic/dependency-injection
 
+## 0.4.0
+
+### Minor Changes
+
+- Turned export of the DependencyContainer class into a names export instead of a default export.
+
 ## 0.3.2
 
 ### Patch Changes

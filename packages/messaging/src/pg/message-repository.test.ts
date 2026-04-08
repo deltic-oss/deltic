@@ -44,7 +44,11 @@ describe('MessageRepositoryUsingPg', () => {
 
     beforeEach(async () => {
         asyncPool = new AsyncPgPool(pgPool);
-        repository = new MessageRepositoryUsingPg<ExampleEventStream>(asyncPool, 'test__message_repository_pg');
+        repository = new MessageRepositoryUsingPg<ExampleEventStream>(
+            asyncPool,
+            'test__message_repository_pg',
+            {tenantContext},
+        );
     });
 
     afterAll(async () => {
@@ -84,7 +88,7 @@ describe('MessageRepositoryUsingPg', () => {
         expect(retrievedStreamIDs).toEqual([1, 2]);
     });
 
-    test.skip('it filters out based on tenant context', async () => {
+    test('it filters out based on tenant context', async () => {
         const firstMessage: AnyMessageFrom<ExampleEventStream> = createMessage('first', 'first');
         const secondMessage: AnyMessageFrom<ExampleEventStream> = createMessage('second', 2);
         tenantContext.use(firstTenantId);

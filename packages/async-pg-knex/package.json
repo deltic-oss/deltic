@@ -25,15 +25,15 @@
   "packageManager": "pnpm@10.12.4",
   "dependencies": {
     "@deltic/async-pg-pool": "workspace:^",
-    "knex": "^3.1.0"
+    "knex": "^3.2.9"
   },
   "peerDependencies": {
     "@deltic/async-pg-pool": "workspace:^",
     "pg": "^8.16.3"
   },
   "devDependencies": {
-    "pg": "^8.16.3",
-    "@types/pg": "^8.15.6"
+    "@types/pg": "^8.20.0",
+    "pg": "^8.20.0"
   },
   "repository": {
     "type": "git",

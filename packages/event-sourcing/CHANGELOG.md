@@ -1,5 +1,15 @@
 # @deltic/event-sourcing
 
+## 0.1.3
+
+### Patch Changes
+
+- Rename interface to be more human, kept BC alias.
+- Updated dependencies
+- Updated dependencies
+  - @deltic/async-pg-pool@0.2.3
+  - @deltic/service-dispatcher@0.2.3
+
 ## 0.1.2
 
 ### Patch Changes

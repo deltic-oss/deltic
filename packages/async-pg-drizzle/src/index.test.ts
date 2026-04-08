@@ -1,8 +1,7 @@
 import {Pool} from 'pg';
-import {AsyncPgPool, type AsyncPoolContext} from '@deltic/async-pg-pool';
+import {AsyncPgPool, asyncPoolContext, type AsyncPoolContext} from '@deltic/async-pg-pool';
 import {AsyncDrizzleConnectionProvider, DrizzleTransactionsNotSupported} from './index.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {StaticMutexUsingMemory} from '@deltic/mutex/static-memory';
 import {pgTestCredentials} from '../../pg-credentials.js';
 import {pgTable, serial, text, integer, boolean, timestamp} from 'drizzle-orm/pg-core';
 import {eq, sql} from 'drizzle-orm';
@@ -31,7 +30,7 @@ const postsTable = pgTable('async_drizzle_posts', {
 
 const asyncLocalStorage = new AsyncLocalStorage<AsyncPoolContext>();
 const setupContext = (): void => {
-    asyncLocalStorage.enterWith({exclusiveAccess: new StaticMutexUsingMemory(), free: []});
+    asyncLocalStorage.enterWith(asyncPoolContext());
 };
 
 describe('AsyncDrizzleConnectionProvider', () => {
