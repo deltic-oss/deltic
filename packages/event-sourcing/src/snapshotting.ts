@@ -38,7 +38,7 @@ export interface AggregateRootWithSnapshotting<
     createSnapshot(): Stream['snapshot'];
 }
 
-export interface AggregateRootWithFactorySnapshotting<
+export interface AggregateRootFactoryWithSnapshotting<
     Stream extends AggregateStreamWithSnapshotting<Stream>,
 > extends AggregateRootFactory<Stream> {
     reconstituteFromSnapshot(
@@ -48,11 +48,18 @@ export interface AggregateRootWithFactorySnapshotting<
     ): Promise<Stream['aggregateRoot']>;
 }
 
+/**
+ * @deprecated BC export, use AggregateRootFactoryWithSnapshotting instead
+ */
+export interface AggregateRootWithFactorySnapshotting<
+    Stream extends AggregateStreamWithSnapshotting<Stream>,
+> extends AggregateRootFactoryWithSnapshotting<Stream> {}
+
 export class AggregateRootRepositoryWithSnapshotting<
     Stream extends AggregateStreamWithSnapshotting<Stream>,
 > extends EventSourcedAggregateRepository<Stream> {
     constructor(
-        protected readonly factory: AggregateRootWithFactorySnapshotting<Stream>,
+        protected readonly factory: AggregateRootFactoryWithSnapshotting<Stream>,
         protected readonly snapshots: SnapshotRepository<Stream>,
         protected readonly messageRepository: MessageRepository<Stream>,
         protected readonly messageDispatcher: MessageDispatcher<Stream> | undefined = undefined,
