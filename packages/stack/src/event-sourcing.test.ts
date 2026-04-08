@@ -1,5 +1,5 @@
 import * as uuid from 'uuid';
-import DependencyContainer from '@deltic/dependency-injection';
+import {DependencyContainer} from '@deltic/dependency-injection';
 import {EventSourcedAggregateRepository} from '@deltic/event-sourcing';
 import {AggregateRootRepositoryWithSnapshotting} from '@deltic/event-sourcing/snapshotting';
 import {OutboxMessageDispatcher} from '@deltic/messaging/outbox';

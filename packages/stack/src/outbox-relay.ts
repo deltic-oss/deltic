@@ -1,4 +1,4 @@
-import DependencyContainer, {forgeServiceKey, type ServiceKey} from '@deltic/dependency-injection';
+import {DependencyContainer, forgeServiceKey, type ServiceKey} from '@deltic/dependency-injection';
 import type {MessageDispatcher, StreamDefinition} from '@deltic/messaging';
 import {OutboxRelay, type OutboxRepository} from '@deltic/messaging/outbox';
 import {OutboxRelayRunner} from '@deltic/messaging/pg/outbox-relay-runner';

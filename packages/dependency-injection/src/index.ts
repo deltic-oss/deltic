@@ -39,7 +39,7 @@ export type ServiceKey<Service> = string & {
     [service]: Service;
 };
 
-class DependencyContainer {
+export class DependencyContainer {
     private cache: Record<string, any> = {};
     private definitions: Record<string, ServiceDefinition> = {};
 
@@ -303,8 +303,6 @@ class DependencyContainer {
 export function forgeServiceKey<Service>(key: string): ServiceKey<Service> {
     return key as unknown as ServiceKey<Service>;
 }
-
-export default DependencyContainer;
 
 export const container = new DependencyContainer();
 

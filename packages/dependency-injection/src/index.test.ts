@@ -1,4 +1,5 @@
-import DependencyContainer, {
+import {
+    DependencyContainer,
     reflectMethods,
     container as exportedContainer,
     forgeServiceKey,

@@ -1,7 +1,7 @@
 import type {AnyMessageFrom} from '@deltic/messaging';
 import {AggregateRootBehavior, type AggregateRootFactory, type AggregateStream} from '@deltic/event-sourcing';
 import type {
-    AggregateRootWithFactorySnapshotting,
+    AggregateRootFactoryWithSnapshotting,
     AggregateRootWithSnapshotting,
     AggregateStreamWithSnapshotting,
     Snapshot,
@@ -145,7 +145,7 @@ export class TestSnapshottedAggregateRoot
 
 // ============ Test Aggregate Root Factory with Snapshotting ============
 
-export class TestSnapshottedAggregateRootFactory implements AggregateRootWithFactorySnapshotting<TestSnapshotStream> {
+export class TestSnapshottedAggregateRootFactory implements AggregateRootFactoryWithSnapshotting<TestSnapshotStream> {
     async reconstituteFromEvents(
         id: string,
         events: AsyncGenerator<AnyMessageFrom<TestSnapshotStream>>,

@@ -1,4 +1,4 @@
-import type DependencyContainer from '@deltic/dependency-injection';
+import type {DependencyContainer} from '@deltic/dependency-injection';
 import {forgeServiceKey, type ServiceKey} from '@deltic/dependency-injection';
 import {
     EventSourcedAggregateRepository,
@@ -8,7 +8,7 @@ import {
 } from '@deltic/event-sourcing';
 import {
     AggregateRootRepositoryWithSnapshotting,
-    type AggregateRootWithFactorySnapshotting,
+    type AggregateRootFactoryWithSnapshotting,
     type AggregateStreamWithSnapshotting,
 } from '@deltic/event-sourcing/snapshotting';
 import type {
@@ -70,7 +70,7 @@ export interface SnapshotConfig<Stream extends AggregateStreamWithSnapshotting<S
      * Factory function that creates an aggregate root factory with snapshot support.
      * This overrides the main factory when snapshotting is enabled.
      */
-    factory(container: DependencyContainer): AggregateRootWithFactorySnapshotting<Stream>;
+    factory(container: DependencyContainer): AggregateRootFactoryWithSnapshotting<Stream>;
 }
 
 /**

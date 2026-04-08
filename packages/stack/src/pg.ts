@@ -1,5 +1,5 @@
 import type {ServiceKey} from '@deltic/dependency-injection';
-import type DependencyContainer from '@deltic/dependency-injection';
+import type {DependencyContainer} from '@deltic/dependency-injection';
 import {AsyncPgPool, TransactionManagerUsingPg} from '@deltic/async-pg-pool';
 import type {AggregateStreamWithSnapshotting, SnapshotRepository} from '@deltic/event-sourcing/snapshotting';
 import {

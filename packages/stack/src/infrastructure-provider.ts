@@ -1,4 +1,4 @@
-import type DependencyContainer from '@deltic/dependency-injection';
+import type {DependencyContainer} from '@deltic/dependency-injection';
 import type {AggregateStreamWithSnapshotting, SnapshotRepository} from '@deltic/event-sourcing/snapshotting';
 import type {MessageRepository, StreamDefinition} from '@deltic/messaging';
 import type {OutboxRepository} from '@deltic/messaging/outbox';

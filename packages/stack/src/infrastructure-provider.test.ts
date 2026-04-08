@@ -1,6 +1,6 @@
 import {Pool} from 'pg';
 import {AsyncPgPool, TransactionManagerUsingPg} from '@deltic/async-pg-pool';
-import DependencyContainer from '@deltic/dependency-injection';
+import {DependencyContainer} from '@deltic/dependency-injection';
 import {MessageRepositoryUsingMemory} from '@deltic/messaging/message-repository-using-memory';
 import {OutboxRepositoryUsingMemory} from '@deltic/messaging/outbox';
 import {MessageRepositoryUsingPg} from '@deltic/messaging/pg/message-repository';

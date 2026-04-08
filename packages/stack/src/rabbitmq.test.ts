@@ -1,4 +1,4 @@
-import DependencyContainer, {forgeServiceKey} from '@deltic/dependency-injection';
+import {DependencyContainer, forgeServiceKey} from '@deltic/dependency-injection';
 import {AMQPConnectionProvider} from '@deltic/messaging/amqp/connection-provider';
 import {AMQPChannelPool} from '@deltic/messaging/amqp/channel-pool';
 import {AMQPMessageDispatcher} from '@deltic/messaging/amqp/message-dispatcher';
