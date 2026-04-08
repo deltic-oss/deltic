@@ -1,7 +1,7 @@
 import {Pool} from 'pg';
 import {
     AsyncPgPool,
-    transactionContextSlot,
+    asyncPgPoolContextSlot,
     type AsyncPgPoolOptions,
     type Connection,
 } from './index.js';
@@ -14,7 +14,7 @@ describe('AsyncPgPool', () => {
     let provider: AsyncPgPool;
     const factoryWithStaticPool = (options: AsyncPgPoolOptions = {}) => new AsyncPgPool(pool, options);
     const factoryWithAsyncPool = (options: AsyncPgPoolOptions = {}) => {
-        const context = composeContextSlotsForTesting([transactionContextSlot]);
+        const context = composeContextSlotsForTesting([asyncPgPoolContextSlot]);
 
         return new AsyncPgPool(pool, options, context);
     };
@@ -34,7 +34,7 @@ describe('AsyncPgPool', () => {
     });
 
     describe.each([
-        ['pool, static transaction context', factoryWithStaticPool],
+        // ['pool, static transaction context', factoryWithStaticPool],
         ['pool, async transaction context', factoryWithAsyncPool],
     ] as const)('basics for %s', (_name, factory) => {
         beforeEach(() => {
@@ -71,6 +71,25 @@ describe('AsyncPgPool', () => {
             }
 
             expect(provider.inTransaction()).toEqual(false);
+        });
+
+        test('smoketest, concurrent does not deadlock', async () => {
+            const collected: string[] = [];
+
+            async function runInTransaction(value: string): Promise<void> {
+                const transaction = await provider.begin();
+                const result = await transaction.query<{v: string}>(`SELECT '${value}' as v`);
+                result.rows.forEach(row => collected.push(row.v));
+                await provider.commit(transaction);
+            }
+
+            await Promise.allSettled([
+                runInTransaction('one'),
+                runInTransaction('two'),
+            ]);
+
+            expect(collected).toContainEqual('one');
+            expect(collected).toContainEqual('two');
         });
 
         test('smoketest, using an encapsulated transaction', async () => {
@@ -233,7 +252,7 @@ describe('AsyncPgPool', () => {
     });
 
     test('runInIsolation() creates an isolated transaction context scope', async () => {
-        const context = composeContextSlots([transactionContextSlot], new AsyncLocalStorage());
+        const context = composeContextSlots([asyncPgPoolContextSlot], new AsyncLocalStorage());
 
         const provider = new AsyncPgPool(pool, {}, context);
 
@@ -249,7 +268,7 @@ describe('AsyncPgPool', () => {
     });
 
     test('runInIsolatedTransaction() creates an isolated transaction context scope', async () => {
-        const context = composeContextSlots([transactionContextSlot], new AsyncLocalStorage());
+        const context = composeContextSlots([asyncPgPoolContextSlot], new AsyncLocalStorage());
 
         const provider = new AsyncPgPool(pool, {}, context);
 

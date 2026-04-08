@@ -18,33 +18,45 @@ export interface Connection extends Omit<PoolClient, 'release'> {
 
 export interface AsyncPoolContext {
     exclusiveAccess: StaticMutex;
+    transactionAccess: StaticMutex,
     sharedTransaction?: Connection | undefined;
     primaryConnection?: Connection | undefined;
     free: Array<[Connection, undefined | ReturnType<typeof setTimeout>]>;
 }
 
-export type AsyncPgPoolContextData = {async_pg_pool: AsyncPoolContext};
+export type AsyncPgPoolContextSlot = {async_pg_pool: AsyncPoolContext};
+
+/**
+ * BC EXPORT
+ */
+export type AsyncPgPoolContextData = AsyncPgPoolContextSlot;
 
 export function asyncPoolContext(): AsyncPoolContext {
     return {
         exclusiveAccess: new StaticMutexUsingMemory(),
+        transactionAccess: new StaticMutexUsingMemory(),
         sharedTransaction: undefined,
         primaryConnection: undefined,
         free: [],
     };
 }
 
-export const transactionContextSlot = defineContextSlot({
+export const asyncPgPoolContextSlot = defineContextSlot({
     key: 'async_pg_pool',
     defaultValue: (): AsyncPoolContext => asyncPoolContext(),
 });
 
-function createDefaultTransactionContext(): Context<AsyncPgPoolContextData> {
-    const store = new ContextStoreUsingMemory<AsyncPgPoolContextData>({
-        async_pg_pool: transactionContextSlot.defaultValue!(),
+/**
+ * BC EXPORT
+ */
+export const transactionContextSlot = asyncPgPoolContextSlot;
+
+function createDefaultTransactionContext(): Context<AsyncPgPoolContextSlot> {
+    const store = new ContextStoreUsingMemory<AsyncPgPoolContextSlot>({
+        async_pg_pool: asyncPgPoolContextSlot.defaultValue!(),
     });
 
-    return composeContextSlots([transactionContextSlot], store);
+    return composeContextSlots([asyncPgPoolContextSlot], store);
 }
 
 export type OnReleaseCallback = (client: Connection, err?: unknown) => Promise<any> | any;
@@ -69,7 +81,7 @@ export class AsyncPgPool {
     constructor(
         private readonly pool: Pool,
         private readonly options: AsyncPgPoolOptions = {},
-        private readonly context: Context<AsyncPgPoolContextData> = createDefaultTransactionContext(),
+        private readonly context: Context<AsyncPgPoolContextSlot> = createDefaultTransactionContext(),
     ) {
         this.keepConnections = options.keepConnections ?? 0;
         this.maxIdleMs = options.maxIdleMs ?? 1000;
@@ -264,6 +276,7 @@ export class AsyncPgPool {
 
     async begin(query: string = this.beginQuery): Promise<Connection> {
         const context = this.resolveTransactionContext();
+        await context.transactionAccess.lock();
         await context.exclusiveAccess.lock();
 
         if (context.sharedTransaction) {
@@ -319,6 +332,7 @@ export class AsyncPgPool {
             throw e;
         } finally {
             this.resolveTransactionContext().sharedTransaction = undefined;
+            await context.transactionAccess.unlock();
         }
     }
 
