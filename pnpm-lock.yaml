@@ -140,7 +140,7 @@ importers:
         version: 8.16.3
     devDependencies:
       '@types/pg':
-        specifier: ^8.20.0
+        specifier: ^8.15.6
         version: 8.20.0
 
   packages/backoff:
@@ -312,7 +312,7 @@ importers:
         specifier: workspace:^
         version: link:../mutex
       fast-equals:
-        specifier: ^6.0.0
+        specifier: ^5.3.2 || ^6.0.0
         version: 6.0.0
       reflect-metadata:
         specifier: ^0.2.2
