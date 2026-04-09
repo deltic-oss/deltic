@@ -87,6 +87,46 @@ describe('AsyncKnexConnectionProvider', () => {
             });
         });
 
+        test('INSERT with onConflict().ignore()', async () => {
+            await provider.connection()(tableName).insert({name: 'Conflict', email: 'conflict@example.com', age: 30});
+
+            // Insert again with same unique email — should be ignored
+            await provider
+                .connection()(tableName)
+                .insert({name: 'Conflict Duplicate', email: 'conflict@example.com', age: 31})
+                .onConflict('email')
+                .ignore();
+
+            const result = await provider.connection().select('*').from(tableName);
+
+            expect(result).toHaveLength(1);
+            expect(result[0]).toMatchObject({
+                name: 'Conflict',
+                email: 'conflict@example.com',
+                age: 30,
+            });
+        });
+
+        test('INSERT with onConflict().merge()', async () => {
+            await provider.connection()(tableName).insert({name: 'Merge', email: 'merge@example.com', age: 30});
+
+            // Insert again with same unique email — should merge (upsert)
+            await provider
+                .connection()(tableName)
+                .insert({name: 'Merge Updated', email: 'merge@example.com', age: 31})
+                .onConflict('email')
+                .merge();
+
+            const result = await provider.connection().select('*').from(tableName);
+
+            expect(result).toHaveLength(1);
+            expect(result[0]).toMatchObject({
+                name: 'Merge Updated',
+                email: 'merge@example.com',
+                age: 31,
+            });
+        });
+
         test('INSERT with returning', async () => {
             const [inserted] = await provider
                 .connection()(tableName)
@@ -292,6 +332,19 @@ describe('AsyncKnexConnectionProvider', () => {
             expect(sql.bindings).toEqual([1]);
         });
 
+        test('toSQL() works with onConflict().ignore()', async () => {
+            const query = provider
+                .connection()(tableName)
+                .insert({name: 'Test', email: 'test@example.com'})
+                .onConflict('email')
+                .ignore();
+
+            const sql = query.toSQL();
+
+            expect(sql.sql).toContain('insert');
+            expect(sql.sql).toContain('on conflict');
+        });
+
         test('toString() returns query string', async () => {
             const query = provider.connection().select('*').from(tableName).where('id', 1);
 
@@ -342,6 +395,28 @@ describe('AsyncKnexConnectionProvider', () => {
             // Verify data was rolled back
             const result = await provider.connection().select('*').from(tableName);
             expect(result).toHaveLength(0);
+        });
+
+        test('transaction with onConflict().ignore()', async () => {
+            const trx = await provider.begin();
+
+            await trx(tableName).insert({name: 'TrxConflict', email: 'trxconflict@example.com', age: 30});
+
+            // Insert again with same unique email — should be ignored
+            await trx(tableName)
+                .insert({name: 'TrxConflict Duplicate', email: 'trxconflict@example.com', age: 31})
+                .onConflict('email')
+                .ignore();
+
+            await provider.commit(trx);
+
+            const result = await provider.connection().select('*').from(tableName);
+            expect(result).toHaveLength(1);
+            expect(result[0]).toMatchObject({
+                name: 'TrxConflict',
+                email: 'trxconflict@example.com',
+                age: 30,
+            });
         });
 
         test('transaction with multiple operations', async () => {

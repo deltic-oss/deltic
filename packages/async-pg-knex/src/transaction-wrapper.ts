@@ -15,30 +15,20 @@ interface TransactionWithConnection extends Transaction {
 }
 
 /**
- * Methods that can start a query on a transaction.
+ * Properties that should be delegated directly to the knex instance
+ * rather than starting a query builder chain.
  */
-const QUERY_METHODS = new Set([
-    'select',
-    'insert',
-    'update',
-    'delete',
-    'del',
-    'from',
-    'into',
-    'table',
-    'with',
-    'withRecursive',
-    'first',
-    'pluck',
-    'count',
-    'min',
-    'max',
-    'sum',
-    'avg',
-    'countDistinct',
-    'sumDistinct',
-    'avgDistinct',
-    'distinct',
+const KNEX_DELEGATE_PROPERTIES = new Set([
+    'client',
+    'schema',
+    'migrate',
+    'seed',
+    'destroy',
+    'ref',
+    'fn',
+    'queryBuilder',
+    'toString',
+    'toSQL',
 ]);
 
 /**
@@ -69,17 +59,27 @@ export function createTransactionWrapper(knex: Knex, pgConnection: PgConnection)
                 };
             }
 
-            // For query builder methods, return a function that creates a bound builder
-            if (typeof prop === 'string' && QUERY_METHODS.has(prop)) {
-                return (...args: unknown[]) => {
-                    const builder = knex.queryBuilder();
-                    (builder as any)[prop](...args);
-                    return builder.connection(pgConnection as any);
-                };
+            // The transaction wrapper is NOT a thenable — prevent Promise unwrapping
+            if (prop === 'then' || prop === 'catch' || prop === 'finally') {
+                return undefined;
             }
 
-            // For other properties, delegate to knex
-            return (knex as any)[prop];
+            // For known knex-level properties, delegate directly
+            if (typeof prop === 'string' && KNEX_DELEGATE_PROPERTIES.has(prop)) {
+                return (knex as any)[prop];
+            }
+
+            // For symbols, delegate to knex
+            if (typeof prop === 'symbol') {
+                return (knex as any)[prop];
+            }
+
+            // Everything else starts a query builder chain bound to the transaction connection
+            return (...args: unknown[]) => {
+                const builder = knex.queryBuilder();
+                (builder as any)[prop](...args);
+                return builder.connection(pgConnection as any);
+            };
         },
     };
 

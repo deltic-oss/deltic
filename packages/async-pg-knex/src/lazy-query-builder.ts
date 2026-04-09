@@ -3,30 +3,20 @@ import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {BufferedCall, Connection} from './types.js';
 
 /**
- * Methods that start a query builder chain.
+ * Properties that should be delegated directly to the knex instance
+ * rather than creating a lazy query builder.
  */
-const QUERY_BUILDER_METHODS = new Set([
-    'select',
-    'insert',
-    'update',
-    'delete',
-    'del',
-    'from',
-    'into',
-    'table',
-    'with',
-    'withRecursive',
-    'first',
-    'pluck',
-    'count',
-    'min',
-    'max',
-    'sum',
-    'avg',
-    'countDistinct',
-    'sumDistinct',
-    'avgDistinct',
-    'distinct',
+const KNEX_DELEGATE_PROPERTIES = new Set([
+    'client',
+    'schema',
+    'migrate',
+    'seed',
+    'destroy',
+    'ref',
+    'fn',
+    'queryBuilder',
+    'toString',
+    'toSQL',
 ]);
 
 /**
@@ -42,13 +32,6 @@ export function createLazyConnection(knex: Knex, pool: AsyncPgPool): Connection 
         },
 
         get(_target, prop) {
-            // For query builder methods, return a function that creates a lazy builder
-            if (typeof prop === 'string' && QUERY_BUILDER_METHODS.has(prop)) {
-                return (...args: unknown[]) => {
-                    return createLazyQueryBuilder(knex, pool, undefined, [{method: prop, args}]);
-                };
-            }
-
             // For raw queries
             if (prop === 'raw') {
                 return (sql: string, bindings?: Knex.RawBinding | Knex.RawBinding[]) => {
@@ -56,8 +39,20 @@ export function createLazyConnection(knex: Knex, pool: AsyncPgPool): Connection 
                 };
             }
 
-            // For non-query properties, delegate to knex
-            return (knex as any)[prop];
+            // For known knex-level properties, delegate directly
+            if (typeof prop === 'string' && KNEX_DELEGATE_PROPERTIES.has(prop)) {
+                return (knex as any)[prop];
+            }
+
+            // For symbols, delegate to knex
+            if (typeof prop === 'symbol') {
+                return (knex as any)[prop];
+            }
+
+            // Everything else starts a query builder chain
+            return (...args: unknown[]) => {
+                return createLazyQueryBuilder(knex, pool, undefined, [{method: prop, args}]);
+            };
         },
     };
 
@@ -105,8 +100,8 @@ export function createLazyQueryBuilder(
             if (prop === 'toSQL') {
                 return () => {
                     const builder = tableName ? knex(tableName) : knex.queryBuilder();
-                    replayBufferedCalls(builder, bufferedCalls);
-                    return builder.toSQL();
+                    const result = replayBufferedCalls(builder, bufferedCalls);
+                    return result.toSQL();
                 };
             }
 
@@ -114,8 +109,8 @@ export function createLazyQueryBuilder(
             if (prop === 'toString') {
                 return () => {
                     const builder = tableName ? knex(tableName) : knex.queryBuilder();
-                    replayBufferedCalls(builder, bufferedCalls);
-                    return builder.toString();
+                    const result = replayBufferedCalls(builder, bufferedCalls);
+                    return result.toString();
                 };
             }
 
@@ -210,10 +205,10 @@ async function executeQuery(
 
     try {
         // Build the query
-        const builder = tableName ? knex(tableName) : knex.queryBuilder();
+        const initial = tableName ? knex(tableName) : knex.queryBuilder();
 
         // Replay buffered calls
-        replayBufferedCalls(builder, bufferedCalls);
+        const builder = replayBufferedCalls(initial, bufferedCalls);
 
         // Bind to our connection and execute
         return await builder.connection(connection as any);
@@ -248,9 +243,13 @@ async function executeRawQuery(
 
 /**
  * Replays buffered method calls on a real query builder.
+ * Returns the final builder, which may differ from the initial one
+ * when methods like onConflict() return a different object.
  */
-function replayBufferedCalls(builder: Knex.QueryBuilder, calls: BufferedCall[]): void {
+function replayBufferedCalls(builder: Knex.QueryBuilder, calls: BufferedCall[]): Knex.QueryBuilder {
+    let current: any = builder;
     for (const {method, args} of calls) {
-        (builder as any)[method](...args);
+        current = current[method](...args) ?? current;
     }
+    return current;
 }
