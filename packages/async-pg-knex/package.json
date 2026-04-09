@@ -1,7 +1,7 @@
 {
   "name": "@deltic/async-pg-knex",
   "type": "module",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Knex query builder integration with @deltic/async-pg-pool",
   "exports": {
     ".": {

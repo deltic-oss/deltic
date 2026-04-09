@@ -1,5 +1,11 @@
 # @deltic/async-pg-knex
 
+## 0.1.4
+
+### Patch Changes
+
+- Materialise to query builder when the proxy is used as a sub-query.
+
 ## 0.1.3
 
 ### Patch Changes
