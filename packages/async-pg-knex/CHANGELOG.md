@@ -1,5 +1,11 @@
 # @deltic/async-pg-knex
 
+## 0.1.3
+
+### Patch Changes
+
+- Support more knex query methods by flipping method detection.
+
 ## 0.1.2
 
 ### Patch Changes
