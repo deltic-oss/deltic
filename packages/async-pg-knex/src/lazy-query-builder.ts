@@ -3,6 +3,13 @@ import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {BufferedCall, Connection} from './types.js';
 
 /**
+ * Symbol used to identify and materialize lazy query builder proxies.
+ * When accessed on a lazy proxy, returns a function that creates the
+ * corresponding real Knex.QueryBuilder.
+ */
+const MATERIALIZE = Symbol('materialize');
+
+/**
  * Properties that should be delegated directly to the knex instance
  * rather than creating a lazy query builder.
  */
@@ -74,6 +81,14 @@ export function createLazyQueryBuilder(
 
     const handler: ProxyHandler<object> = {
         get(_target, prop, receiver) {
+            // Allow materializing this proxy into a real Knex query builder
+            if (prop === MATERIALIZE) {
+                return () => {
+                    const builder = tableName ? knex(tableName) : knex.queryBuilder();
+                    return replayBufferedCalls(builder, bufferedCalls);
+                };
+            }
+
             // Handle thenable - called when awaited
             if (prop === 'then') {
                 return (
@@ -242,6 +257,20 @@ async function executeRawQuery(
 }
 
 /**
+ * Materializes a value if it is a lazy query builder proxy,
+ * converting it into a real Knex query builder.
+ */
+function materializeArg(arg: unknown): unknown {
+    if (arg != null && typeof arg === 'object') {
+        const materialize = (arg as any)[MATERIALIZE];
+        if (typeof materialize === 'function') {
+            return materialize();
+        }
+    }
+    return arg;
+}
+
+/**
  * Replays buffered method calls on a real query builder.
  * Returns the final builder, which may differ from the initial one
  * when methods like onConflict() return a different object.
@@ -249,7 +278,7 @@ async function executeRawQuery(
 function replayBufferedCalls(builder: Knex.QueryBuilder, calls: BufferedCall[]): Knex.QueryBuilder {
     let current: any = builder;
     for (const {method, args} of calls) {
-        current = current[method](...args) ?? current;
+        current = current[method](...args.map(materializeArg)) ?? current;
     }
     return current;
 }

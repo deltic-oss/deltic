@@ -299,6 +299,45 @@ describe('AsyncKnexConnectionProvider', () => {
         });
     });
 
+    describe('subquery in from', () => {
+        beforeEach(async () => {
+            await provider.connection()(tableName).insert([
+                {name: 'Alice', email: 'alice@example.com', age: 25, active: true},
+                {name: 'Bob', email: 'bob@example.com', age: 30, active: true},
+                {name: 'Charlie', email: 'charlie@example.com', age: 35, active: false},
+            ]);
+        });
+
+        test('from() with a query builder wraps in parentheses', async () => {
+            const subquery = provider.connection().select('name', 'age').from(tableName).where('active', true).as('active_users');
+
+            const result = await provider.connection().select('name').from(subquery).orderBy('name');
+
+            expect(result).toHaveLength(2);
+            expect(result.map((r: any) => r.name)).toEqual(['Alice', 'Bob']);
+        });
+
+        test('from() with subquery from separate connection() calls', async () => {
+            const connectionA = provider.connection();
+            const connectionB = provider.connection();
+
+            const subquery = connectionA.select('name', 'age').from(tableName).where('active', true).as('active_users');
+            const result = await connectionB.select('name').from(subquery).orderBy('name');
+
+            expect(result).toHaveLength(2);
+            expect(result.map((r: any) => r.name)).toEqual(['Alice', 'Bob']);
+        });
+
+        test('toSQL() with subquery in from()', () => {
+            const subquery = provider.connection().select('name', 'age').from(tableName).where('active', true).as('active_users');
+
+            const sql = provider.connection().select('name').from(subquery).toSQL();
+
+            expect(sql.sql).toContain('(');
+            expect(sql.sql).toContain(') as');
+        });
+    });
+
     describe('raw queries', () => {
         test('raw SELECT query', async () => {
             await provider.connection()(tableName).insert({name: 'Test', email: 'test@example.com'});
