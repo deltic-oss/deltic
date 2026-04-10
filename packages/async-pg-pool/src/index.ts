@@ -178,6 +178,7 @@ export class AsyncPgPool {
 
     async flushSharedContext(): Promise<void> {
         const context = this.resolveTransactionContext();
+        await context.transactionAccess.lock();
         await context.exclusiveAccess.lock();
 
         try {
@@ -201,6 +202,7 @@ export class AsyncPgPool {
             }
         } finally {
             await context.exclusiveAccess.unlock();
+            await context.transactionAccess.unlock();
         }
     }
 
@@ -331,7 +333,7 @@ export class AsyncPgPool {
             await this.doRelease(client, e);
             throw e;
         } finally {
-            this.resolveTransactionContext().sharedTransaction = undefined;
+            context.sharedTransaction = undefined;
             await context.transactionAccess.unlock();
         }
     }

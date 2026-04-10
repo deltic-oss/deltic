@@ -1,5 +1,11 @@
 # @deltic/async-pg-pool
 
+## 0.2.4
+
+### Patch Changes
+
+- Wait until the current transaction is finished before flusing all shared context.
+
 ## 0.2.3
 
 ### Patch Changes

@@ -166,14 +166,6 @@ describe('AsyncPgPool', () => {
 
             expect(result.rows[0].value).toEqual('something');
         });
-
-        test('shared context flushing errors when the transaction is still open', async () => {
-            const transaction = await provider.begin();
-
-            await expect(provider.flushSharedContext()).rejects.toThrow();
-
-            await provider.rollback(transaction);
-        });
     });
 
     describe.each([['pool', factoryWithStaticPool]] as const)('transactional behaviour using %s', (name, factory) => {
