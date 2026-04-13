@@ -21,7 +21,7 @@ export interface ContextStore<C extends ContextData<C>> {
 }
 
 export class ContextStoreUsingMemory<C extends ContextData<C>> implements ContextStore<C> {
-    constructor(private context: Partial<C> = {}) {
+    constructor(private context?: Partial<C> | undefined) {
     }
 
     getStore(): Partial<C> | undefined {
@@ -73,24 +73,24 @@ export interface ContextOperator<C extends ContextData<C>> extends ContextRunner
 }
 
 export class Context<C extends ContextData<C>> implements ContextOperator<C> {
+    private rootContext: Partial<C>;
+
     constructor(
         private readonly storage: ContextStore<Partial<C>>,
         private readonly createContextValue: ContextValueCreator<C> = defaultContextValueCreator,
+        readonly defaults: Partial<C> = {},
     ) {
+        this.rootContext = createContextValue({}, defaults);
     }
 
     async run<R>(fn: () => Promise<R>, context: Partial<C> = {}): Promise<R> {
-        const inherited = this.storage.getStore() ?? {};
+        const inherited = this.context();
         const merged = this.createContextValue(inherited, context);
         return this.storage.run(merged, fn);
     }
 
     attach(context: Partial<C>): void {
-        const store = this.storage.getStore();
-
-        if (store === undefined) {
-            throw new Error('No async context available, missing middleware or consumer decorator?');
-        }
+        const store = this.context();
 
         for (const [key, value] of Object.entries(context)) {
             (store as any)[key] = value;
@@ -98,11 +98,11 @@ export class Context<C extends ContextData<C>> implements ContextOperator<C> {
     }
 
     get<K extends keyof C>(key: K): C[K] | undefined {
-        return this.storage.getStore()?.[key];
+        return this.context()[key];
     }
 
     context(): Partial<C> {
-        return this.storage.getStore() ?? {};
+        return this.storage.getStore() ?? this.rootContext;
     }
 }
 

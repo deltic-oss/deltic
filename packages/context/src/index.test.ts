@@ -14,10 +14,11 @@ interface MyContext {
     name: string;
     age: number;
     tenant_id: string;
+    value: string;
 }
 
 describe.each([
-    ['static', () => new ContextStoreUsingMemory<MyContext>({})],
+    ['static', () => new ContextStoreUsingMemory<MyContext>()],
     ['async_hooks', () => new AsyncLocalStorage<Partial<MyContext>>()],
 ] as const)('@deltic/context - %s', (_name, factory) => {
     let contextStore: ContextStore<MyContext>;
@@ -28,7 +29,9 @@ describe.each([
 
     beforeEach(() => {
         contextStore = factory();
-        context = new Context(contextStore);
+        context = new Context(contextStore, undefined, {
+            value: 'default',
+        });
         tenantContext = new ValueReadWriterUsingContext<'tenant_id', string>(context, 'tenant_id');
     });
 
@@ -69,8 +72,31 @@ describe.each([
     });
 
     test('getting the full context', async () => {
+        let values: Partial<MyContext> = {};
+
+        // inherits from the root context
         await context.run(async () => {
-            expect(context.context()).toEqual({});
+            values = context.context();
+        });
+
+        expect(values).toEqual({
+            value: 'default',
+        });
+
+        // change the context when running with additional context
+        await context.run(async () => {
+            values = context.context();
+        }, {value: 'changed'});
+
+        expect(values).toEqual({
+            value: 'changed',
+        });
+
+        // running with changed context does not change the root context
+        values = context.context();
+
+        expect(values).toEqual({
+            value: 'default',
         });
     });
 
@@ -119,6 +145,10 @@ describe.each([
 
         expect(name).toEqual('Jane');
         expect(age).toEqual(37); // inherited from parent
+    });
+
+    test('root context uses the default values', () => {
+        expect(context.get('value')).toEqual('default');
     });
 
     test('using tenant context', async () => {
@@ -181,7 +211,7 @@ interface CompositeTestContext {
 }
 
 describe.each([
-    ['StaticContextStore', () => new ContextStoreUsingMemory<CompositeTestContext>({})],
+    ['StaticContextStore', () => new ContextStoreUsingMemory<CompositeTestContext>()],
     ['AsyncLocalStorage', () => new AsyncLocalStorage<Partial<CompositeTestContext>>()],
 ] as const)('composeContextSlots - %s', (_name, storeFactory) => {
     // Define slots for testing
