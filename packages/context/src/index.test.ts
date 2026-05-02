@@ -285,8 +285,11 @@ describe.each([
     });
 
     test('defaults are re-evaluated on each run', async () => {
-        let counter = 0;
-        const counterSlot = defineContextSlot({key: 'counter', defaultValue: () => ++counter});
+        let counter = -1; // initial slot is also evaluated
+        const counterSlot = defineContextSlot({
+            key: 'counter',
+            defaultValue: () => ++counter,
+            inherited: false});
 
         const ctx = composeContextSlots([counterSlot]);
 
