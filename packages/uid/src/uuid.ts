@@ -1,8 +1,8 @@
 import {PrefixedBrandedIdGenerator} from './index.js';
-import * as uuid from 'uuid';
+import {v7} from 'uuid';
 
 export function uuidV7PrefixedBrandedIdGenerator<Prefix extends string>(
     prefix: Prefix,
 ): PrefixedBrandedIdGenerator<Prefix> {
-    return new PrefixedBrandedIdGenerator(prefix, uuid.v7);
+    return new PrefixedBrandedIdGenerator(prefix, v7);
 }
