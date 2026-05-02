@@ -33,7 +33,7 @@ export interface AggregateStreamWithSnapshotting<
 }
 
 export interface AggregateRootWithSnapshotting<
-    Stream extends AggregateStreamWithSnapshotting<Stream> & AggregateStream<Stream>,
+    Stream extends AggregateStreamWithSnapshotting<Stream>
 > extends AggregateRoot<Stream> {
     createSnapshot(): Stream['snapshot'];
 }
