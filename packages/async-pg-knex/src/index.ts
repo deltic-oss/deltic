@@ -53,7 +53,6 @@ export interface AsyncKnexConnectionProviderOptions {
  */
 export class AsyncKnexConnectionProvider implements ConnectionProvider {
     private readonly knex: Knex;
-    private currentTransaction: Transaction | undefined;
 
     constructor(
         private readonly pool: AsyncPgPool,
@@ -118,23 +117,24 @@ export class AsyncKnexConnectionProvider implements ConnectionProvider {
      */
     async begin(beginQuery?: string): Promise<Transaction> {
         const pgConnection = await this.pool.begin(beginQuery);
-        const trx = createTransactionWrapper(this.knex, pgConnection);
-        this.currentTransaction = trx;
 
-        return trx;
+        return createTransactionWrapper(this.knex, pgConnection);
     }
 
     /**
      * Get the current transaction.
      *
+     * The active transaction is sourced from the underlying pool, which tracks
+     * it in the async context. Each call returns a fresh wrapper bound to that
+     * connection, so callers in different async flows get a wrapper scoped to
+     * their own context.
+     *
      * @throws Error if not currently in a transaction
      */
     withTransaction(): Transaction {
-        if (!this.currentTransaction) {
-            throw new Error('Not in a transaction. Call begin() first.');
-        }
+        const pgConnection = this.pool.withTransaction();
 
-        return this.currentTransaction;
+        return createTransactionWrapper(this.knex, pgConnection);
     }
 
     /**
@@ -154,7 +154,6 @@ export class AsyncKnexConnectionProvider implements ConnectionProvider {
     async commit(trx: Transaction): Promise<void> {
         const pgConnection = extractPgConnection(trx);
         await this.pool.commit(pgConnection);
-        this.currentTransaction = undefined;
     }
 
     /**
@@ -168,7 +167,6 @@ export class AsyncKnexConnectionProvider implements ConnectionProvider {
     async rollback(trx: Transaction, error?: unknown): Promise<void> {
         const pgConnection = extractPgConnection(trx);
         await this.pool.rollback(pgConnection, error);
-        this.currentTransaction = undefined;
     }
 
     /**

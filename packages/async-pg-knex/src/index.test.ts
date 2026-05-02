@@ -1,6 +1,7 @@
 import {Pool} from 'pg';
 import {AsyncPgPool, asyncPoolContext, type AsyncPoolContext} from '@deltic/async-pg-pool';
 import {AsyncKnexConnectionProvider} from './index.js';
+import {pgConnectionSymbol} from './transaction-wrapper.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {pgTestCredentials} from '../../pg-credentials.js';
 
@@ -500,17 +501,17 @@ describe('AsyncKnexConnectionProvider', () => {
             await provider.commit(trx);
         });
 
-        test('withTransaction() returns current transaction', async () => {
+        test('withTransaction() returns a wrapper bound to the active transaction', async () => {
             const trx = await provider.begin();
 
             const currentTrx = provider.withTransaction();
-            expect(currentTrx).toBe(trx);
+            expect((currentTrx as any)[pgConnectionSymbol]).toBe((trx as any)[pgConnectionSymbol]);
 
             await provider.commit(trx);
         });
 
         test('withTransaction() throws when not in transaction', () => {
-            expect(() => provider.withTransaction()).toThrow('Not in a transaction');
+            expect(() => provider.withTransaction()).toThrow('no transaction was active');
         });
 
         test('custom BEGIN query', async () => {
