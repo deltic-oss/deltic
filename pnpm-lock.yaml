@@ -60,6 +60,15 @@ importers:
         specifier: ^3.5.32
         version: 3.5.32(typescript@6.0.2)
     devDependencies:
+      '@deltic/event-sourcing':
+        specifier: workspace:^
+        version: link:../packages/event-sourcing
+      '@deltic/messaging':
+        specifier: workspace:^
+        version: link:../packages/messaging
+      reflect-metadata:
+        specifier: ^0.2.2
+        version: 0.2.2
       vitepress:
         specifier: 2.0.0-alpha.17
         version: 2.0.0-alpha.17(@types/node@25.5.2)(jiti@2.6.1)(lightningcss@1.32.0)(postcss@8.5.8)(typescript@6.0.2)(yaml@2.8.3)

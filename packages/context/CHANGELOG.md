@@ -1,5 +1,11 @@
 # @deltic/context
 
+## 0.1.5
+
+### Patch Changes
+
+- Add root context, which is used when no context is resolved.
+
 ## 0.1.4
 
 ### Patch Changes
