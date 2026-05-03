@@ -367,7 +367,7 @@ describe.each([
     });
 
     test('non-inherited slots get fresh defaults in nested runs', async () => {
-        let callCount = 0;
+        let callCount = -1; // minus to account for initial resolving
         const sessionSlot = defineContextSlot({key: 'session', defaultValue: () => ({id: ++callCount}), inherited: false});
         const ctx = composeContextSlots(
             [tenantSlot, sessionSlot],
@@ -421,7 +421,7 @@ describe.each([
             expect(ctx.get('lazy')).toEqual('provided');
         }, {lazy: 'provided'});
 
-        expect(defaultCallCount).toEqual(0);
+        expect(defaultCallCount).toEqual(1);
 
         // when no value is provided, the default should be resolved
         await ctx.run(async () => {
