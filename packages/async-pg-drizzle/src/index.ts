@@ -112,7 +112,6 @@ export class AsyncDrizzleConnectionProvider<
 > {
     private readonly lazyDb: NodePgDatabase<TSchema>;
     private readonly drizzleConfig: {schema?: TSchema; logger?: boolean | Logger; casing?: 'snake_case' | 'camelCase'};
-    private currentTransaction: NodePgDatabase<TSchema> | undefined;
 
     constructor(
         private readonly pool: AsyncPgPool,
@@ -171,27 +170,24 @@ export class AsyncDrizzleConnectionProvider<
      */
     async begin(beginQuery?: string): Promise<NodePgDatabase<TSchema>> {
         const pgConnection = await this.pool.begin(beginQuery);
-        const trx = this.blockTransactions(
-            drizzle(pgConnection as any, this.drizzleConfig),
-        );
 
-        (trx as any)[pgConnectionSymbol] = pgConnection;
-        this.currentTransaction = trx;
-
-        return trx;
+        return this.createBoundInstance(pgConnection);
     }
 
     /**
      * Get the current transaction drizzle instance.
      *
+     * The active transaction is sourced from the underlying pool, which tracks
+     * it in the async context. Each call returns a fresh drizzle instance
+     * bound to that connection, so callers in different async flows get an
+     * instance scoped to their own context.
+     *
      * @throws Error if not currently in a transaction
      */
     withTransaction(): NodePgDatabase<TSchema> {
-        if (!this.currentTransaction) {
-            throw new Error('Not in a transaction. Call begin() first.');
-        }
+        const pgConnection = this.pool.withTransaction();
 
-        return this.currentTransaction;
+        return this.createBoundInstance(pgConnection);
     }
 
     /**
@@ -211,7 +207,6 @@ export class AsyncDrizzleConnectionProvider<
     async commit(trx: NodePgDatabase<TSchema>): Promise<void> {
         const pgConnection = extractPgConnection(trx);
         await this.pool.commit(pgConnection);
-        this.currentTransaction = undefined;
     }
 
     /**
@@ -225,7 +220,6 @@ export class AsyncDrizzleConnectionProvider<
     async rollback(trx: NodePgDatabase<TSchema>, error?: unknown): Promise<void> {
         const pgConnection = extractPgConnection(trx);
         await this.pool.rollback(pgConnection, error);
-        this.currentTransaction = undefined;
     }
 
     /**
@@ -264,6 +258,20 @@ export class AsyncDrizzleConnectionProvider<
             await this.rollback(trx, e);
             throw e;
         }
+    }
+
+    /**
+     * Builds a drizzle instance bound to a specific pg connection and tags
+     * it with the connection symbol so commit/rollback can recover it.
+     */
+    private createBoundInstance(pgConnection: PgConnection): NodePgDatabase<TSchema> {
+        const trx = this.blockTransactions(
+            drizzle(pgConnection as any, this.drizzleConfig),
+        );
+
+        (trx as any)[pgConnectionSymbol] = pgConnection;
+
+        return trx;
     }
 
     /**

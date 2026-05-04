@@ -1,7 +1,7 @@
 import {Pool} from 'pg';
 import Cursor from 'pg-cursor';
 import {AsyncPgPool, asyncPoolContext, type AsyncPoolContext} from '@deltic/async-pg-pool';
-import {AsyncKyselyConnectionProvider, KyselyTransactionsNotSupported} from './index.js';
+import {AsyncKyselyConnectionProvider, KyselyTransactionsNotSupported, pgConnectionSymbol} from './index.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {pgTestCredentials} from '../../pg-credentials.js';
 import {sql, type Generated} from 'kysely';
@@ -406,17 +406,17 @@ describe('AsyncKyselyConnectionProvider', () => {
             expect(afterCommit.rows).toHaveLength(1);
         });
 
-        test('withTransaction returns current transaction', async () => {
+        test('withTransaction returns an instance bound to the active transaction', async () => {
             const trx = await provider.begin();
 
             const currentTrx = provider.withTransaction();
-            expect(currentTrx).toBe(trx);
+            expect((currentTrx as any)[pgConnectionSymbol]).toBe((trx as any)[pgConnectionSymbol]);
 
             await provider.commit(trx);
         });
 
         test('withTransaction throws when not in transaction', () => {
-            expect(() => provider.withTransaction()).toThrow('Not in a transaction. Call begin() first.');
+            expect(() => provider.withTransaction()).toThrow('no transaction was active');
         });
 
         test('queries on transaction instance use transaction connection', async () => {

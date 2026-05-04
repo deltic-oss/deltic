@@ -1,6 +1,6 @@
 import {Pool} from 'pg';
 import {AsyncPgPool, asyncPoolContext, type AsyncPoolContext} from '@deltic/async-pg-pool';
-import {AsyncDrizzleConnectionProvider, DrizzleTransactionsNotSupported} from './index.js';
+import {AsyncDrizzleConnectionProvider, DrizzleTransactionsNotSupported, pgConnectionSymbol} from './index.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {pgTestCredentials} from '../../pg-credentials.js';
 import {pgTable, serial, text, integer, boolean, timestamp} from 'drizzle-orm/pg-core';
@@ -338,17 +338,17 @@ describe('AsyncDrizzleConnectionProvider', () => {
             expect(afterCommit.rows).toHaveLength(1);
         });
 
-        test('withTransaction returns current transaction', async () => {
+        test('withTransaction returns an instance bound to the active transaction', async () => {
             const trx = await provider.begin();
 
             const currentTrx = provider.withTransaction();
-            expect(currentTrx).toBe(trx);
+            expect((currentTrx as any)[pgConnectionSymbol]).toBe((trx as any)[pgConnectionSymbol]);
 
             await provider.commit(trx);
         });
 
         test('withTransaction throws when not in transaction', () => {
-            expect(() => provider.withTransaction()).toThrow('Not in a transaction. Call begin() first.');
+            expect(() => provider.withTransaction()).toThrow('no transaction was active');
         });
 
         test('custom BEGIN query', async () => {

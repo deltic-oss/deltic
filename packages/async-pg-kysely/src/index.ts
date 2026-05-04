@@ -110,7 +110,6 @@ export function extractPgConnection<DB>(db: Kysely<DB>): PgConnection {
  */
 export class AsyncKyselyConnectionProvider<DB> {
     private readonly db: Kysely<DB>;
-    private currentTransaction: Kysely<DB> | undefined;
 
     constructor(
         private readonly pool: AsyncPgPool,
@@ -167,25 +166,24 @@ export class AsyncKyselyConnectionProvider<DB> {
      */
     async begin(beginQuery?: string): Promise<Kysely<DB>> {
         const pgConnection = await this.pool.begin(beginQuery);
-        const trx = this.createBoundInstance(pgConnection);
 
-        (trx as any)[pgConnectionSymbol] = pgConnection;
-        this.currentTransaction = trx;
-
-        return trx;
+        return this.createBoundInstance(pgConnection);
     }
 
     /**
      * Get the current transaction Kysely instance.
      *
+     * The active transaction is sourced from the underlying pool, which tracks
+     * it in the async context. Each call returns a fresh Kysely instance
+     * bound to that connection, so callers in different async flows get an
+     * instance scoped to their own context.
+     *
      * @throws Error if not currently in a transaction
      */
     withTransaction(): Kysely<DB> {
-        if (!this.currentTransaction) {
-            throw new Error('Not in a transaction. Call begin() first.');
-        }
+        const pgConnection = this.pool.withTransaction();
 
-        return this.currentTransaction;
+        return this.createBoundInstance(pgConnection);
     }
 
     /**
@@ -205,7 +203,6 @@ export class AsyncKyselyConnectionProvider<DB> {
     async commit(trx: Kysely<DB>): Promise<void> {
         const pgConnection = extractPgConnection(trx);
         await this.pool.commit(pgConnection);
-        this.currentTransaction = undefined;
     }
 
     /**
@@ -219,7 +216,6 @@ export class AsyncKyselyConnectionProvider<DB> {
     async rollback(trx: Kysely<DB>, error?: unknown): Promise<void> {
         const pgConnection = extractPgConnection(trx);
         await this.pool.rollback(pgConnection, error);
-        this.currentTransaction = undefined;
     }
 
     /**
@@ -274,8 +270,8 @@ export class AsyncKyselyConnectionProvider<DB> {
     }
 
     /**
-     * Creates a Kysely instance bound to a specific pg connection.
-     * Used for transaction instances that must use a dedicated connection.
+     * Creates a Kysely instance bound to a specific pg connection and tags
+     * it with the connection symbol so commit/rollback can recover it.
      */
     private createBoundInstance(pgConnection: PgConnection): Kysely<DB> {
         const connectionWrapper = new AsyncPgConnection(pgConnection, {cursor: this.options.cursor});
@@ -295,13 +291,17 @@ export class AsyncKyselyConnectionProvider<DB> {
             createIntrospector: (db: Kysely<any>) => new PostgresIntrospector(db),
         };
 
-        return this.blockTransactions(
+        const trx = this.blockTransactions(
             new Kysely<DB>({
                 dialect,
                 plugins: this.options.plugins,
                 log: this.options.log,
             }),
         );
+
+        (trx as any)[pgConnectionSymbol] = pgConnection;
+
+        return trx;
     }
 
     /**
