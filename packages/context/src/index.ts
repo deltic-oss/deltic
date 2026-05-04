@@ -73,14 +73,12 @@ export interface ContextOperator<C extends ContextData<C>> extends ContextRunner
 }
 
 export class Context<C extends ContextData<C>> implements ContextOperator<C> {
-    private rootContext: Partial<C>;
 
     constructor(
         private readonly storage: ContextStore<Partial<C>>,
         private readonly createContextValue: ContextValueCreator<C> = defaultContextValueCreator,
         readonly defaults: Partial<C> = {},
     ) {
-        this.rootContext = createContextValue({}, defaults);
     }
 
     async run<R>(fn: () => Promise<R>, context: Partial<C> = {}): Promise<R> {
@@ -102,7 +100,7 @@ export class Context<C extends ContextData<C>> implements ContextOperator<C> {
     }
 
     context(): Partial<C> {
-        return this.storage.getStore() ?? this.rootContext;
+        return this.storage.getStore() ?? {};
     }
 }
 

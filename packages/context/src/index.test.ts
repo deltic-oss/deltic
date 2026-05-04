@@ -74,14 +74,10 @@ describe.each([
     test('getting the full context', async () => {
         let values: Partial<MyContext> = {};
 
-        // inherits from the root context
         await context.run(async () => {
             values = context.context();
         });
 
-        expect(values).toEqual({
-            value: 'default',
-        });
 
         // change the context when running with additional context
         await context.run(async () => {
@@ -92,12 +88,9 @@ describe.each([
             value: 'changed',
         });
 
-        // running with changed context does not change the root context
         values = context.context();
 
-        expect(values).toEqual({
-            value: 'default',
-        });
+        expect(values).toEqual({});
     });
 
     test('attaching additional context', async () => {
@@ -145,10 +138,6 @@ describe.each([
 
         expect(name).toEqual('Jane');
         expect(age).toEqual(37); // inherited from parent
-    });
-
-    test('root context uses the default values', () => {
-        expect(context.get('value')).toEqual('default');
     });
 
     test('using tenant context', async () => {
@@ -285,7 +274,7 @@ describe.each([
     });
 
     test('defaults are re-evaluated on each run', async () => {
-        let counter = -1; // initial slot is also evaluated
+        let counter = 0;
         const counterSlot = defineContextSlot({
             key: 'counter',
             defaultValue: () => ++counter,
@@ -367,7 +356,7 @@ describe.each([
     });
 
     test('non-inherited slots get fresh defaults in nested runs', async () => {
-        let callCount = -1; // minus to account for initial resolving
+        let callCount = 0;
         const sessionSlot = defineContextSlot({key: 'session', defaultValue: () => ({id: ++callCount}), inherited: false});
         const ctx = composeContextSlots(
             [tenantSlot, sessionSlot],
@@ -421,7 +410,7 @@ describe.each([
             expect(ctx.get('lazy')).toEqual('provided');
         }, {lazy: 'provided'});
 
-        expect(defaultCallCount).toEqual(1);
+        expect(defaultCallCount).toEqual(0);
 
         // when no value is provided, the default should be resolved
         await ctx.run(async () => {
