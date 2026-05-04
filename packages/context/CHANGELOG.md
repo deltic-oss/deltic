@@ -1,5 +1,11 @@
 # @deltic/context
 
+## 0.1.7
+
+### Patch Changes
+
+- Remove root context.
+
 ## 0.1.6
 
 ### Patch Changes

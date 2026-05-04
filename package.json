@@ -12,7 +12,9 @@
     "oxlint": "oxlint",
     "oxlint:fix": "oxlint --fix",
     "fmt": "oxfmt --check",
-    "fmt:fix": "oxfmt"
+    "fmt:fix": "oxfmt",
+    "cv": "pnpm run build && pnpm changeset version",
+    "c": "pnpm changest"
   },
   "workspaces": [
     "packages/*"
