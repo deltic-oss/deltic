@@ -1,5 +1,11 @@
 # @deltic/async-pg-knex
 
+## 0.1.7
+
+### Patch Changes
+
+- Re-publish with compiled code
+
 ## 0.1.6
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @deltic/context
 
+## 0.1.6
+
+### Patch Changes
+
+- Re-publish with compiled code
+
 ## 0.1.5
 
 ### Patch Changes
