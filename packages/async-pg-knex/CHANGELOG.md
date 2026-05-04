@@ -1,5 +1,19 @@
 # @deltic/async-pg-knex
 
+## 0.1.6
+
+### Patch Changes
+
+- Source the active transaction from the underlying pool instead of instance state.
+
+  `AsyncKnexConnectionProvider`, `AsyncDrizzleConnectionProvider`, and
+  `AsyncKyselyConnectionProvider` all stored the current transaction wrapper on
+  the instance, but the underlying `AsyncPgPool` tracks transactions in async
+  context. Sharing one provider across concurrent async flows could therefore
+  return a wrapper from the wrong context (or none at all). `withTransaction()`
+  now consults the pool and returns a fresh wrapper bound to the connection
+  active in the caller's async context.
+
 ## 0.1.5
 
 ### Patch Changes
