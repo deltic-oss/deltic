@@ -6,6 +6,7 @@ import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import {WaitGroup} from '@deltic/wait-group';
 import {StandardError} from '@deltic/error-standard';
 import type {OutboxRelay} from '../outbox.js';
+import {AsyncResource} from 'node:async_hooks';
 
 export interface MultiOutboxRelayRunnerOptions {
     channelName?: string;
@@ -54,12 +55,6 @@ export class MultiOutboxRelayRunner {
         this.pollIntervalMs = options.pollIntervalMs ?? 2500;
         this.lockRetryMs = options.lockRetryMs ?? 1000;
         this.identifiers = Object.keys(relays);
-        this.events.on('process', (identifier: string) => {
-            void this.processBatch(identifier).catch((err) => {
-                this.shouldContinue = false;
-                this.waiter?.reject(err);
-            });
-        });
     }
 
     async start(): Promise<void> {
@@ -74,6 +69,14 @@ export class MultiOutboxRelayRunner {
 
         try {
             await this.pool.runInIsolation(async () => {
+                this.events.removeAllListeners('process');
+                this.events.on('process', AsyncResource.bind((identifier: string) => {
+                    void this.processBatch(identifier).catch((err) => {
+                        this.shouldContinue = false;
+                        this.waiter?.reject(err);
+                    });
+                }));
+
                 while (this.shouldContinue) {
                     if (await this.mutex.tryLock()) {
                         this.hasLock = true;
@@ -215,13 +218,13 @@ export class MultiOutboxRelayRunner {
             let releaseError: unknown;
 
             try {
-                connection.on('notification', (notification) => {
+                connection.on('notification', AsyncResource.bind((notification) => {
                     const identifier = notification.payload;
 
                     if (identifier !== undefined && identifier in this.relays) {
                         this.events.emit('process', identifier);
                     }
-                });
+                }));
 
                 await connection.query(`LISTEN ${this.channelName}`);
                 await this.shutdownSignal!.promise;
