@@ -1,5 +1,11 @@
 # @deltic/async-pg-pool
 
+## 0.2.5
+
+### Patch Changes
+
+- Prevent interactions post-flushing
+
 ## 0.2.4
 
 ### Patch Changes
