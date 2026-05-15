@@ -80,7 +80,7 @@ export const providerSetups: ProviderTestSetup[] = [
             pgPool = undefined;
         },
         afterEachFn: async () => {
-            await asyncPool?.flushSharedContext();
+            await asyncPool?.flush();
             await pgPool?.query('TRUNCATE TABLE test_stack_events RESTART IDENTITY');
             await pgPool?.query('TRUNCATE TABLE test_stack_outbox RESTART IDENTITY');
             await pgPool?.query('TRUNCATE TABLE test_stack_snapshots');

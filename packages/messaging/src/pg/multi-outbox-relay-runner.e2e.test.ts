@@ -90,8 +90,8 @@ beforeEach(() => {
 afterEach(async () => {
     await runner?.stop();
     await runner2?.stop();
-    await runnerPool?.flushSharedContext();
-    await runnerPool2?.flushSharedContext();
+    await runnerPool?.flush();
+    await runnerPool2?.flush();
 
     runner = undefined;
     runner2 = undefined;
@@ -102,7 +102,7 @@ afterEach(async () => {
     const outboxB = new OutboxRepositoryUsingPg<StreamB>(testPool, tableB);
     await outboxA.truncate();
     await outboxB.truncate();
-    await testPool.flushSharedContext();
+    await testPool.flush();
 });
 
 afterAll(async () => {

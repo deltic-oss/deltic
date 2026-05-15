@@ -26,6 +26,7 @@
     "@deltic/context": "workspace:^"
   },
   "peerDependencies": {
+    "@deltic/wait-group": "workspace:^",
     "@deltic/context": "workspace:^",
     "@deltic/mutex": "workspace:^",
     "@deltic/transaction-manager": "workspace:^",

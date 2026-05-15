@@ -57,12 +57,12 @@ describe('SnapshotRepositoryUsingPg', () => {
     afterAll(async () => {
         await pgPool.query('DROP TABLE IF EXISTS test__snapshots');
         await pgPool.query('DROP TABLE IF EXISTS test__snapshots_tenant');
-        await asyncPool?.flushSharedContext();
+        await asyncPool?.flush();
         await pgPool.end();
     });
 
     afterEach(async () => {
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
         await pgPool.query('TRUNCATE TABLE test__snapshots');
         await pgPool.query('TRUNCATE TABLE test__snapshots_tenant');
     });

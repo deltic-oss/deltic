@@ -85,7 +85,7 @@ describe('AsyncDrizzleConnectionProvider', () => {
                 // Ignore errors during cleanup
             }
         }
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
     });
 
     // -- Basic queries --

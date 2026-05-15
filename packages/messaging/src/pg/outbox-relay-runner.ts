@@ -111,7 +111,7 @@ export class OutboxRelayRunner<Stream extends StreamDefinition> {
                         this.hasLock = false;
                     }
 
-                    await this.pool.flushSharedContext();
+                    await this.pool.flush();
                 }
             });
         } finally {

@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
-    await asyncPool.flushSharedContext();
+    await asyncPool.flush();
     await pool.end();
 });
 
@@ -70,7 +70,7 @@ describe.each([
     });
     afterEach(async () => {
         await repository.truncate();
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
     });
 
     test('dispatching messages end up in the outbox repository', async () => {

@@ -51,7 +51,7 @@ describe.each([
     });
 
     afterEach(async () => {
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
     });
 
     afterAll(async () => {

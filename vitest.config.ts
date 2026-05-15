@@ -18,7 +18,7 @@ export default defineConfig({
     test: {
         retry: 3,
         logHeapUsage: true,
-        testTimeout: 10_000,
+        // testTimeout: 10_000,
         include: ['packages/*/src/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
         globals: true,
         clearMocks: false,

@@ -76,7 +76,7 @@ describe('Delayed Outbox Repository', () => {
     });
     afterEach(async () => {
         await repository.truncate();
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
     });
 
     test('dispatching messages end up in the outbox repository, and respects message delays', async () => {

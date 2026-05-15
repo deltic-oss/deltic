@@ -45,7 +45,7 @@ describe.each([
             return;
         }
 
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
     });
     afterAll(async () => {
         await store.clear();
@@ -54,7 +54,7 @@ describe.each([
             return;
         }
 
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
         await pool.end();
     });
 

@@ -90,7 +90,7 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
 
     afterEach(async () => {
         await store.clear();
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
     });
 
     afterAll(async () => {

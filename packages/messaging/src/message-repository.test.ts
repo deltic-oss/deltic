@@ -58,7 +58,7 @@ describe.each([
                 });
             },
             eachCleanup: async () => {
-                await asyncPool.flushSharedContext();
+                await asyncPool.flush();
                 await pgPool.query('TRUNCATE TABLE test__message_repository RESTART IDENTITY');
             },
         },

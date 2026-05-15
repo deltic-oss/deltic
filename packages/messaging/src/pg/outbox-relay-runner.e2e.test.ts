@@ -73,15 +73,15 @@ beforeEach(() => {
 afterEach(async () => {
     await runner?.stop();
     await runner2?.stop();
-    await runnerPool?.flushSharedContext();
-    await runnerPool2?.flushSharedContext();
+    await runnerPool?.flush();
+    await runnerPool2?.flush();
     runner = undefined;
     runner2 = undefined;
     runnerPool = undefined;
     runnerPool2 = undefined;
     const testOutbox = new OutboxRepositoryUsingPg<ExampleStream>(testPool, tableName);
     await testOutbox.truncate();
-    await testPool.flushSharedContext();
+    await testPool.flush();
 });
 
 afterAll(async () => {

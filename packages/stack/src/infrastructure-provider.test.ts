@@ -73,7 +73,7 @@ const providerExpectations: ProviderExpectations[] = [
             pgPool = undefined;
         },
         afterEachFn: async () => {
-            await asyncPool?.flushSharedContext();
+            await asyncPool?.flush();
         },
         expectations: {
             messageRepository: MessageRepositoryUsingPg,
@@ -173,7 +173,7 @@ describe('InfrastructureProviderUsingPostgres', () => {
     });
 
     afterEach(async () => {
-        await asyncPool?.flushSharedContext();
+        await asyncPool?.flush();
     });
 
     test('uses provided pool from container', () => {

@@ -28,13 +28,13 @@ describe('AsyncPgPool', () => {
     });
 
     afterEach(async () => {
-        if (provider) {
-            await provider.flushSharedContext();
+        if (provider && !provider.wasFlushed()) {
+            await provider.flush();
         }
     });
 
     describe.each([
-        // ['pool, static transaction context', factoryWithStaticPool],
+        ['pool, static transaction context', factoryWithStaticPool],
         ['pool, async transaction context', factoryWithAsyncPool],
     ] as const)('basics for %s', (_name, factory) => {
         beforeEach(() => {

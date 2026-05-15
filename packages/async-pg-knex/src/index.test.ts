@@ -65,7 +65,7 @@ describe('AsyncKnexConnectionProvider', () => {
                 // Ignore errors during cleanup
             }
         }
-        await asyncPool.flushSharedContext();
+        await asyncPool.flush();
     });
 
     describe('basic queries', () => {

@@ -144,6 +144,9 @@ importers:
       '@deltic/transaction-manager':
         specifier: workspace:^
         version: link:../transaction-manager
+      '@deltic/wait-group':
+        specifier: workspace:^
+        version: link:../wait-group
       pg:
         specifier: ^8.16.3
         version: 8.16.3
