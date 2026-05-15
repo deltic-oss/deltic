@@ -32,15 +32,16 @@ describe.each([
             return;
         }
         pool = new Pool(pgTestCredentials);
-        asyncPool = new AsyncPgPool(pool);
-
         await pool.query('DROP TABLE IF EXISTS test__kv_store');
         await pool.query(createKeyValueSchemaQuery('test__kv_store'));
     });
     beforeEach(() => {
+        asyncPool = new AsyncPgPool(pool);
         store = factory();
     });
     afterEach(async () => {
+        await store.clear();
+
         if (!usesDatabase) {
             return;
         }
@@ -48,8 +49,6 @@ describe.each([
         await asyncPool.flush();
     });
     afterAll(async () => {
-        await store.clear();
-
         if (!usesDatabase) {
             return;
         }

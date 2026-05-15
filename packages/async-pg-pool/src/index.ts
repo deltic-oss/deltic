@@ -193,6 +193,10 @@ export class AsyncPgPool {
     }
 
     async flush(): Promise<void> {
+        if (this.wasFlushed()) {
+            return;
+        }
+
         const context = this.resolveContext();
         await context.transactionAccess.lock();
         await context.exclusiveAccess.lock();

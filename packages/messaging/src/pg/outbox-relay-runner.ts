@@ -7,6 +7,7 @@ import {WaitGroup} from '@deltic/wait-group';
 import {StandardError} from '@deltic/error-standard';
 import type {StreamDefinition} from '../index.js';
 import type {OutboxRelay} from '../outbox.js';
+import {AsyncResource} from 'node:async_hooks';
 
 export interface OutboxRelayRunnerOptions {
     channelName: string;
@@ -51,12 +52,6 @@ export class OutboxRelayRunner<Stream extends StreamDefinition> {
         this.commitSize = options.commitSize ?? 25;
         this.pollIntervalMs = options.pollIntervalMs ?? 2500;
         this.lockRetryMs = options.lockRetryMs ?? 1000;
-        this.events.on('process', () => {
-            void this.processBatch().catch((err) => {
-                this.shouldContinue = false;
-                this.waiter?.reject(err);
-            });
-        });
     }
 
     async start(): Promise<void> {
@@ -71,6 +66,14 @@ export class OutboxRelayRunner<Stream extends StreamDefinition> {
 
         try {
             await this.pool.runInIsolation(async () => {
+                this.events.removeAllListeners('process');
+                this.events.on('process', AsyncResource.bind(() => {
+                    void this.processBatch().catch((err) => {
+                        this.shouldContinue = false;
+                        this.waiter?.reject(err);
+                    });
+                }));
+
                 while (this.shouldContinue) {
                     if (await this.mutex.tryLock()) {
                         this.hasLock = true;
@@ -187,9 +190,9 @@ export class OutboxRelayRunner<Stream extends StreamDefinition> {
             let releaseError: unknown;
 
             try {
-                connection.on('notification', () => {
+                connection.on('notification', AsyncResource.bind(() => {
                     this.events.emit('process');
-                });
+                }));
 
                 await connection.query(`LISTEN ${this.options.channelName}`);
                 await this.shutdownSignal!.promise;

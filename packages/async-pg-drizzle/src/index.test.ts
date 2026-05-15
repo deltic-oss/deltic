@@ -40,8 +40,6 @@ describe('AsyncDrizzleConnectionProvider', () => {
 
     beforeAll(async () => {
         pool = new Pool(pgTestCredentials);
-        asyncPool = new AsyncPgPool(pool, {keepConnections: 0});
-        provider = new AsyncDrizzleConnectionProvider(asyncPool);
 
         // Create test tables
         await pool.query(`
@@ -73,6 +71,9 @@ describe('AsyncDrizzleConnectionProvider', () => {
     });
 
     beforeEach(async () => {
+        asyncPool = new AsyncPgPool(pool, {keepConnections: 0});
+        provider = new AsyncDrizzleConnectionProvider(asyncPool);
+
         setupContext();
         await pool.query('TRUNCATE async_drizzle_posts, async_drizzle_test RESTART IDENTITY CASCADE');
     });

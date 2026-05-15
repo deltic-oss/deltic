@@ -45,8 +45,6 @@ describe('AsyncKyselyConnectionProvider', () => {
 
     beforeAll(async () => {
         pool = new Pool(pgTestCredentials);
-        asyncPool = new AsyncPgPool(pool, {keepConnections: 0});
-        provider = new AsyncKyselyConnectionProvider<DB>(asyncPool);
 
         await pool.query(`
             DROP TABLE IF EXISTS async_kysely_posts;
@@ -71,13 +69,15 @@ describe('AsyncKyselyConnectionProvider', () => {
     });
 
     afterAll(async () => {
-        await provider.destroy();
         await pool.query('DROP TABLE IF EXISTS async_kysely_posts');
         await pool.query('DROP TABLE IF EXISTS async_kysely_test');
         await pool.end();
     });
 
     beforeEach(async () => {
+        asyncPool = new AsyncPgPool(pool, {keepConnections: 0});
+        provider = new AsyncKyselyConnectionProvider<DB>(asyncPool);
+
         setupContext();
         await pool.query('TRUNCATE async_kysely_posts, async_kysely_test RESTART IDENTITY CASCADE');
     });
@@ -723,13 +723,13 @@ describe('AsyncKyselyConnectionProvider', () => {
         describe('with cursor configured', () => {
             let streamProvider: AsyncKyselyConnectionProvider<DB>;
 
-            beforeAll(() => {
+            beforeEach(() => {
                 streamProvider = new AsyncKyselyConnectionProvider<DB>(asyncPool, {
                     cursor: Cursor,
                 });
             });
 
-            afterAll(async () => {
+            afterEach(async () => {
                 await streamProvider.destroy();
             });
 

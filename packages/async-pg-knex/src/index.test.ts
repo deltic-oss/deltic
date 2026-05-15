@@ -17,8 +17,6 @@ describe('AsyncKnexConnectionProvider', () => {
 
     beforeAll(async () => {
         pool = new Pool(pgTestCredentials);
-        asyncPool = new AsyncPgPool(pool, {keepConnections: 0});
-        provider = new AsyncKnexConnectionProvider(asyncPool);
 
         // Create test tables
         await pool.query(`
@@ -46,11 +44,13 @@ describe('AsyncKnexConnectionProvider', () => {
     afterAll(async () => {
         await pool.query(`DROP TABLE IF EXISTS ${postsTable}`);
         await pool.query(`DROP TABLE IF EXISTS ${tableName}`);
-        await provider.destroy();
         await pool.end();
     });
 
     beforeEach(async () => {
+        asyncPool = new AsyncPgPool(pool, {keepConnections: 0});
+        provider = new AsyncKnexConnectionProvider(asyncPool);
+
         setupContext();
         // Clear tables before each test
         await pool.query(`TRUNCATE ${postsTable}, ${tableName} RESTART IDENTITY CASCADE`);
