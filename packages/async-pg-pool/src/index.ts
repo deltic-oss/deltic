@@ -64,6 +64,7 @@ export type OnReleaseCallback = (client: Connection, err?: unknown) => Promise<a
 
 export interface AsyncPgPoolOptions {
     keepConnections?: number;
+    keepPrimaryConnection?: false,
     maxIdleMs?: number;
     onClaim?: (client: Connection) => Promise<any> | any;
     onRelease?: OnReleaseCallback | string;
@@ -78,6 +79,7 @@ export class AsyncPgPool {
     private readonly freshResetQuery?: string;
     private readonly onRelease?: OnReleaseCallback;
     private readonly beginQuery: string;
+    private readonly keepPrimaryConnection: boolean;
 
     constructor(
         private readonly pool: Pool,
@@ -88,6 +90,7 @@ export class AsyncPgPool {
         this.maxIdleMs = options.maxIdleMs ?? 1000;
         this.freshResetQuery = options.freshResetQuery;
         const onRelease = options.onRelease;
+        this.keepPrimaryConnection = options.keepPrimaryConnection ?? true;
         this.onRelease = typeof onRelease === 'string' ? (client: Connection) => client.query(onRelease) : onRelease;
         this.beginQuery = options.beginQuery ?? 'BEGIN';
     }
@@ -133,6 +136,10 @@ export class AsyncPgPool {
 
             if (transaction) {
                 return transaction;
+            }
+
+            if (this.keepPrimaryConnection === false) {
+                return this.claim();
             }
 
             const primaryConnection = context.primaryConnection;
@@ -366,7 +373,7 @@ export class AsyncPgPool {
     async release(connection: Connection, err: unknown = undefined): Promise<void> {
         const context = this.resolveContext();
 
-        if (connection === context.primaryConnection) {
+        if (connection === context.primaryConnection && this.keepPrimaryConnection) {
             return;
         }
 

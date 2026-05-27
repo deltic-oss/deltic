@@ -1,5 +1,11 @@
 # @deltic/async-pg-pool
 
+## 0.2.6
+
+### Patch Changes
+
+- Allow opting out of primary connection sharing.
+
 ## 0.2.5
 
 ### Patch Changes

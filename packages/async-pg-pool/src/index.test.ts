@@ -34,12 +34,14 @@ describe('AsyncPgPool', () => {
     });
 
     describe.each([
-        ['pool, static transaction context', factoryWithStaticPool],
-        ['pool, async transaction context', factoryWithAsyncPool],
-    ] as const)('basics for %s', (_name, factory) => {
+        ['pool, static transaction context', factoryWithStaticPool, undefined],
+        ['pool, async transaction context', factoryWithAsyncPool, undefined],
+        ['pool, without sharing primary connections', factoryWithAsyncPool, false],
+    ] as const)('basics for %s', (_name, factory, keepPrimaryConnection) => {
         beforeEach(() => {
             provider = factory({
                 freshResetQuery: 'RESET ALL',
+                keepPrimaryConnection,
             });
         });
 
@@ -102,6 +104,17 @@ describe('AsyncPgPool', () => {
             });
 
             expect(wasInTransaction).toEqual(true);
+        });
+
+        test('primary connection is the same or not', async () => {
+            const expectConnectionsToBeTheSame = keepPrimaryConnection === undefined;
+            const connection = await provider.primary();
+            const anotherConnection = await provider.primary();
+
+            expect(connection === anotherConnection).toEqual(expectConnectionsToBeTheSame);
+
+            await provider.release(connection);
+            await provider.release(anotherConnection);
         });
     });
 
