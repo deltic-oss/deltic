@@ -65,6 +65,7 @@ export type OnReleaseCallback = (client: Connection, err?: unknown) => Promise<a
 export interface AsyncPgPoolOptions {
     keepConnections?: number;
     keepPrimaryConnection?: false,
+    lockAfterFlush?: false,
     maxIdleMs?: number;
     onClaim?: (client: Connection) => Promise<any> | any;
     onRelease?: OnReleaseCallback | string;
@@ -80,6 +81,7 @@ export class AsyncPgPool {
     private readonly onRelease?: OnReleaseCallback;
     private readonly beginQuery: string;
     private readonly keepPrimaryConnection: boolean;
+    private readonly lockAfterFlush: boolean;
 
     constructor(
         private readonly pool: Pool,
@@ -91,6 +93,7 @@ export class AsyncPgPool {
         this.freshResetQuery = options.freshResetQuery;
         const onRelease = options.onRelease;
         this.keepPrimaryConnection = options.keepPrimaryConnection ?? true;
+        this.lockAfterFlush = options.lockAfterFlush ?? true;
         this.onRelease = typeof onRelease === 'string' ? (client: Connection) => client.query(onRelease) : onRelease;
         this.beginQuery = options.beginQuery ?? 'BEGIN';
     }
@@ -102,7 +105,7 @@ export class AsyncPgPool {
             throw new Error('No transaction context available. Did you forget to call context.run()?');
         }
 
-        if (context.flushed) {
+        if (context.flushed && this.lockAfterFlush) {
             throw new Error('The pool context is already flushed, no more database operations allowed!');
         }
 

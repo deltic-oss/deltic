@@ -34,14 +34,16 @@ describe('AsyncPgPool', () => {
     });
 
     describe.each([
-        ['pool, static transaction context', factoryWithStaticPool, undefined],
-        ['pool, async transaction context', factoryWithAsyncPool, undefined],
-        ['pool, without sharing primary connections', factoryWithAsyncPool, false],
-    ] as const)('basics for %s', (_name, factory, keepPrimaryConnection) => {
+        ['pool, static transaction context', factoryWithStaticPool, undefined, undefined],
+        ['pool, async transaction context', factoryWithAsyncPool, undefined, undefined],
+        ['pool, without sharing primary connections', factoryWithAsyncPool, false, undefined],
+        ['pool, without locking after flushing', factoryWithAsyncPool, undefined, false],
+    ] as const)('basics for %s', (_name, factory, keepPrimaryConnection, lockAfterFlush) => {
         beforeEach(() => {
             provider = factory({
                 freshResetQuery: 'RESET ALL',
                 keepPrimaryConnection,
+                lockAfterFlush,
             });
         });
 
@@ -115,6 +117,30 @@ describe('AsyncPgPool', () => {
 
             await provider.release(connection);
             await provider.release(anotherConnection);
+        });
+
+        test.runIf(lockAfterFlush === undefined)('errors when trying to obtain a connection after flushing', async () => {
+            await provider.flush();
+
+            await expect(provider.claim()).rejects.toThrow();
+        });
+
+        test.runIf(lockAfterFlush === false)('does not error when trying to obtain a connection after flushing', async () => {
+            await provider.flush();
+            let connection: Connection | undefined = undefined;
+
+            const obtainConnection = async () => {
+                connection = await provider.claim();
+            };
+
+            try {
+                await expect(obtainConnection()).resolves.not.toThrow();
+            } finally {
+                if (connection) {
+                    await provider.release(connection);
+                }
+            }
+
         });
     });
 

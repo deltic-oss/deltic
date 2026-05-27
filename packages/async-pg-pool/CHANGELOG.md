@@ -1,5 +1,11 @@
 # @deltic/async-pg-pool
 
+## 0.2.7
+
+### Patch Changes
+
+- Allow opting out of obtaining a connection post flushing.
+
 ## 0.2.6
 
 ### Patch Changes
