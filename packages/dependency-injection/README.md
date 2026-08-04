@@ -8,7 +8,7 @@ Most DI containers force you to manually manage cleanup order or clean up everyt
 services). This container:
 
 1. **Tracks actual usage** - only cleans up services that were resolved
-2. **Respects dependencies** - services are cleaned up in reverse resolution order
+2. **Respects dependencies** - a service is cleaned up before the services it depends on
 3. **Maximizes concurrency** - independent services cleanup in parallel
 4. **No magic** - dependencies resolved via simple factory functions
 
@@ -18,6 +18,7 @@ services). This container:
 2. Smart dependency cleanup orchestration
 3. Proxy-based lazy services
 4. Instance registration
+5. Created instances, built outside the registry, cleaned up inside the dependency chain
 
 ## Installation
 
@@ -71,6 +72,27 @@ const service = container.resolve(myNameService);
 expect(service.fullName()).toEqual('Frank de Jonge');
 ```
 
+## Cleanup ordering
+
+`container.cleanup()` shuts down what was actually used, in an order derived from how it was
+constructed. Everything that needs ordering takes part in a graph: services with a `cleanup`
+callback, services constructed behind a proxy, and created instances. While a factory runs, whatever
+it resolves is recorded as a dependency of it.
+
+Services without a cleanup callback are transparent: they have nothing to shut down, so the
+dependencies they resolve are attributed to whoever consumes them, including consumers that are
+served the same instance from cache later on.
+
+The graph is then walked from consumers to dependencies. Everything that nothing else depends on is
+cleaned up first, concurrently; each following step waits for its consumers to finish. A dependency
+therefore stays usable for as long as anything that may need it is still shutting down.
+
+A cycle that cannot be resolved this way throws, and nothing is cleaned up:
+
+```
+Circular dependency detected in cleanup routine, could not shut down: something, collection.
+```
+
 ## Common Problems &amp; Solutions
 
 ### Problem: A stateful service needs to be shut down
@@ -104,6 +126,39 @@ const pool = container.resolve(poolToken);
 
 await container.cleanup();
 ```
+
+### Problem: Something needs to be constructed without being a registered service
+
+Not everything belongs in the registry. A worker started for a single job, a subscription set up by
+a test, a consumer created per tenant: these need dependencies from the container and need to be shut
+down, but there is no sensible key to register them under. Constructing them by hand leaves them out
+of the cleanup, which means their dependencies may shut down while they are still using them.
+
+#### Solution: Created instances
+
+`createInstance` runs a factory that resolves from the container, and registers the cleanup along
+with it. The instance takes part in the same cleanup graph as registered services, so it is cleaned
+up before the services it depends on.
+
+```typescript
+import {container} from '@deltic/dependency-injection';
+
+const worker = container.createInstance({
+    factory: container => new Worker(container.resolve(poolToken)),
+    cleanup: async worker => {
+        await worker.stop();
+    },
+});
+
+await worker.run();
+
+// `worker` is stopped first, the pool it depends on is ended after
+await container.cleanup();
+```
+
+Created instances are not registered, cannot be resolved, and are never shared: each call constructs
+a new instance. They nest like services do, so an instance created while a service is being
+constructed is cleaned up after that service.
 
 ### Problem: Circular dependencies between services
 
