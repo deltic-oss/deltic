@@ -108,7 +108,7 @@ await queue.purge(); // clears pending tasks
 | `start()` | Starts processing |
 | `stop()` | Stops processing, waits for in-flight tasks |
 | `purge()` | Clears all pending tasks |
-| `isProcessing()` | Returns `true` if tasks are being processed |
+| `isProcessing()` | Returns `true` if the queue is started — whether or not work is in flight |
 
 ### `ProcessQueueOptions<Task>`
 

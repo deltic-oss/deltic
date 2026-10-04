@@ -192,56 +192,53 @@ these dependencies from always being constructed.
 
 Dependencies can explicitly be lazy, which delays construction until they are actually used.
 
-Either use the `lazy: true` setting:
+Either use the `lazy: true` setting, which makes the *definition* lazy — resolving hands out a
+proxy, and construction happens on first use:
 
 ```typescript
-import {container, ServiceKey} from '@deltic/dependency-injection';
+import {container, type ServiceKey} from '@deltic/dependency-injection';
 
-// declared early so it can be referenced
-let collectionToken: ServiceKey<SomeCollection>;
-
-const somethingToken = container.register('something', {
-    factory: c => {
-        return new Something(
-            'something-name',
-            c.resolve<SomeCollection>(collectionToken),
-        );
-    },
-});
-
-collectionToken = container.register(somethingToken, {
+// The explicit token types break the type-level inference cycle that the
+// value-level laziness allows.
+const collectionToken: ServiceKey<SomeCollection> = container.register('collection', {
     lazy: true,
     factory: container => {
         return new SomeCollection(
             'collection-name',
-            [container.resolve<Something>('something')],
+            [container.resolve(somethingToken)],
+        );
+    },
+});
+
+const somethingToken: ServiceKey<Something> = container.register('something', {
+    factory: container => {
+        return new Something(
+            'something-name',
+            container.resolve(collectionToken),
         );
     },
 });
 ```
 
-Or, explicitly resolve services as lazy:
+Or keep the definition eager and make one *consumer* lazy with `resolveLazy`, which breaks the
+cycle at the call site instead:
 
 ```typescript
-
-// ALTERNATIVE
-let collectionToken: ServiceKey<SomeCollection>;
-
-const somethingToken = container.register('something', {
+const somethingToken: ServiceKey<Something> = container.register('something', {
     factory: container => {
         return new Something(
             'something-name',
-            container.resolveLazy<SomeCollection>(collectionToken),
-            // ------------- ^ load it lazy,
+            container.resolveLazy(collectionToken),
+            // ------------- ^ a proxy; the collection is built on first use
         );
     },
 });
 
-collectionToken = container.register('collection', {
+const collectionToken: ServiceKey<SomeCollection> = container.register('collection', {
     factory: container => {
         return new SomeCollection(
             'collection-name',
-            [container.resolve<Something>('something')],
+            [container.resolve(somethingToken)],
         );
     },
 });
