@@ -183,6 +183,9 @@ importers:
       '@deltic/messaging':
         specifier: workspace:^
         version: link:../messaging
+      '@deltic/offset-tracking':
+        specifier: workspace:^
+        version: link:../offset-tracking
       '@deltic/transaction-manager':
         specifier: workspace:^
         version: link:../transaction-manager
