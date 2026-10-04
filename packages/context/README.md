@@ -29,6 +29,29 @@ await context.run(async () => {
 }, {requestId: 'req-123', tenantId: 'acme'});
 ```
 
+### Defaults
+
+A third constructor argument gives every scope a starting set of values:
+
+```typescript
+const context = new Context<RequestContext>(store, undefined, {tenantId: 'public'});
+
+await context.run(async () => {
+    context.get('tenantId'); // 'public'
+});
+
+await context.run(async () => {
+    await context.run(async () => {
+        context.get('tenantId'); // 'acme', a surrounding scope outranks the default
+    });
+}, {tenantId: 'acme'});
+```
+
+Values provided to `run()` win over the defaults, and so do values inherited from a surrounding
+scope — the defaults only fill in what nothing else decided. They are a fixed object shared by
+every scope, so use [context slots](#context-slots) when a default needs to be created per scope
+(`defaultValue: () => createTx()`).
+
 ### With AsyncLocalStorage
 
 For production use, pass an `AsyncLocalStorage` instance as the store to scope context per async execution:
