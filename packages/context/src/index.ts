@@ -82,7 +82,12 @@ export class Context<C extends ContextData<C>> implements ContextOperator<C> {
     }
 
     async run<R>(fn: () => Promise<R>, context: Partial<C> = {}): Promise<R> {
-        const inherited = this.context();
+        /**
+         * The defaults seed the inherited side rather than the provided side: a value a parent
+         * scope decided on outranks a default, so a nested run keeps what its parent set instead
+         * of falling back. That matches how slot defaults behave in `composeContextSlots`.
+         */
+        const inherited = {...this.defaults, ...this.context()};
         const merged = this.createContextValue(inherited, context);
         return this.storage.run(merged, fn);
     }
