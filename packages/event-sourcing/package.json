@@ -87,6 +87,7 @@
     "@deltic/messaging": "workspace:^",
     "@deltic/service-dispatcher": "workspace:^",
     "@deltic/transaction-manager": "workspace:^",
+    "@deltic/offset-tracking": "workspace:^",
     "@deltic/uid": "workspace:^",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2"
