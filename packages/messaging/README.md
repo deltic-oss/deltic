@@ -141,6 +141,17 @@ import {SequentialMessageConsumer} from '@deltic/messaging/sequential-message-co
 import {MessageConsumerChain} from '@deltic/messaging/message-consumer-chain';
 ```
 
+`MessageConsumerChain` and `MessageDispatcherChain` run their members one after the other, in the
+order they were given, and stop at the first failure. Order is therefore something you can rely on —
+put the outbox dispatcher before synchronous consumers, or a projection before the webhook that embeds
+it. A chain settles only once none of its members is running, so a lock or transaction scoped around
+it covers everything the chain did. The members before a failing one have already handled the
+message; when the failure leads to a redelivery they receive it again, so they need to be idempotent.
+
+```typescript
+const consumer = new MessageConsumerChain(updateProjection, sendWebhook);
+```
+
 ### Outbox Pattern
 
 Reliable message delivery through the outbox pattern:
@@ -205,9 +216,9 @@ import {UpcasterUpcastingMessageRepository} from '@deltic/messaging/upcasting';
 | `@deltic/messaging/consuming-message-dispatcher` | Routes dispatched messages to a consumer |
 | `@deltic/messaging/dispatching-message-consumer` | Dispatches to type-specific handlers |
 | `@deltic/messaging/decorating-message-consumer` | Wraps a consumer with decoration |
-| `@deltic/messaging/message-consumer-chain` | Chains multiple consumers |
+| `@deltic/messaging/message-consumer-chain` | Runs multiple consumers in order |
 | `@deltic/messaging/message-decorator-chain` | Chains multiple decorators |
-| `@deltic/messaging/message-dispatcher-chain` | Chains multiple dispatchers |
+| `@deltic/messaging/message-dispatcher-chain` | Runs multiple dispatchers in order |
 | `@deltic/messaging/locking-message-consumer` | Adds mutex locking to consumption |
 | `@deltic/messaging/sequential-message-consumer` | Sequential message processing |
 | `@deltic/messaging/reducing-message-consumer` | Reduce pattern for consumers |

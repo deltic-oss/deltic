@@ -153,14 +153,16 @@ export class DecoratingMessageConsumer<Stream> implements MessageConsumer<Stream
     ) {}
 }
 
-// CORRECT: Chain pattern for fan-out
+// CORRECT: Chain pattern, members run in order and the chain settles after the last one
 export class MessageConsumerChain<Stream> implements MessageConsumer<Stream> {
     constructor(...consumers: MessageConsumer<Stream>[]) {
         this.consumers = consumers;
     }
 
     async consume(message: AnyMessageFrom<Stream>): Promise<void> {
-        await Promise.all(this.consumers.map(c => c.consume(message)));
+        for (const consumer of this.consumers) {
+            await consumer.consume(message);
+        }
     }
 }
 
