@@ -1,5 +1,5 @@
 import {type ConfirmChannel} from 'amqplib';
-import {StandardError, errorToMessage} from '@deltic/error-standard';
+import {StandardError, errorToMessage, isUnrecoverableError} from '@deltic/error-standard';
 import type {AnyMessageFrom, MessageDispatcher, MessagesFrom, StreamDefinition} from '../index.js';
 import {type AMQPChannelPool} from './channel-pool.js';
 
@@ -55,11 +55,35 @@ export class AMQPMessageDispatcher<Stream extends StreamDefinition> implements M
                 return await this.publishMessages(channel, messages);
             } catch (error) {
                 lastError = error;
+
+                /**
+                 * The connection provider only reports this after it has already spent its whole
+                 * healing window trying to reach the broker. Spending the remaining tries on it
+                 * would only delay the process ending on the failure.
+                 */
+                if (isUnrecoverableError(error)) {
+                    break;
+                }
             } finally {
                 if (channel !== undefined) {
-                    await this.channelPool.release(channel);
+                    /**
+                     * Forgotten before the release rather than after, because the next try can
+                     * fail at acquiring a channel. Releasing this one a second time then throws
+                     * out of the finally and replaces the failure the caller needs to see.
+                     */
+                    const leased = channel;
+                    channel = undefined;
+                    await this.channelPool.release(leased);
                 }
             }
+        }
+
+        /**
+         * Passed on as it is rather than wrapped: an unrecoverable failure has to stay
+         * recognisable to whatever decides to end the process on it.
+         */
+        if (isUnrecoverableError(lastError)) {
+            throw lastError;
         }
 
         throw UnableToDispatchMessages.afterRetries(this.maxTries, lastError);

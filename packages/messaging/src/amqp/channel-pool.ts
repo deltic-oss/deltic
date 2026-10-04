@@ -55,6 +55,7 @@ export class AMQPChannelPool {
     private activeConnection: ChannelModel | undefined = undefined;
     private pool: ConfirmChannel[] = [];
     private leased = new Set<ConfirmChannel>();
+    private usable = new Set<ConfirmChannel>();
 
     constructor(
         private readonly connectionProvider: AMQPConnectionProvider,
@@ -69,17 +70,20 @@ export class AMQPChannelPool {
     }
 
     async channel(timeout: number = 5000): Promise<ConfirmChannel> {
-        if (this.pool.length > 0) {
-            const channel = this.pool.shift();
+        /**
+         * The connection is resolved before the pool is consulted, because a pooled channel does
+         * not outlive the connection it was opened on. Asking first is what lets a dropped
+         * connection empty the pool, and what gets a new one established at all: a pool served
+         * without asking never reports that its channels have nothing left to talk over.
+         */
+        let connection = await this.connection();
+        const pooled = this.takeFromPool();
 
-            if (channel === undefined) {
-                throw ChannelPoolExhausted.becausePoolIsEmpty();
-            }
-
+        if (pooled !== undefined) {
             this.shutdownWaiter.add();
-            this.leased.add(channel);
+            this.leased.add(pooled);
 
-            return channel;
+            return pooled;
         }
 
         const max = this.options.max ?? 100;
@@ -94,23 +98,43 @@ export class AMQPChannelPool {
             await blocker.promise;
             clearTimeout(timer);
 
-            const channel = this.pool.shift();
+            /**
+             * Being woken means a lease was freed, which is not the same as a channel waiting in
+             * the pool: the lease may have been freed by a channel that died with its connection.
+             * A pooled one is taken when there is one, and otherwise the acquire carries on below
+             * and opens a channel on the slot that just came free — on whatever connection is
+             * current now, since the one resolved before waiting may be the one that died.
+             */
+            connection = await this.connection();
+            const waited = this.takeFromPool();
 
-            if (channel === undefined) {
-                throw ChannelPoolExhausted.becausePoolIsEmpty();
+            if (waited !== undefined) {
+                this.shutdownWaiter.add();
+                this.leased.add(waited);
+
+                return waited;
             }
-
-            this.shutdownWaiter.add();
-            this.leased.add(channel);
-
-            return channel;
         }
 
         try {
             this.shutdownWaiter.add();
-            const connection = await this.connection();
             const channel = await connection.createConfirmChannel();
             const prefetchCount = this.options.prefetchCount ?? 10;
+            this.usable.add(channel);
+
+            channel.on('close', () => {
+                this.usable.delete(channel);
+                this.discardFromPool(channel);
+            });
+
+            /**
+             * The broker closes a channel when an operation on it fails (a missing queue or
+             * exchange, an unknown delivery tag), and amqplib reports that as an 'error' event.
+             * Without a listener, an EventEmitter turns it into an uncaught exception that ends
+             * the process. The failed operation already rejects with the same error, and the
+             * 'close' event that follows takes the channel out of circulation.
+             */
+            channel.on('error', () => undefined);
 
             this.leased.add(channel);
             await channel.prefetch(prefetchCount);
@@ -127,25 +151,72 @@ export class AMQPChannelPool {
             throw ChannelNotLeased.onRelease();
         }
 
+        /**
+         * A channel that died while it was leased has nothing left to offer the pool, and
+         * closing it a second time only produces an error saying it is already closed.
+         */
+        if (!this.usable.has(channel)) {
+            this.shutdownWaiter.done();
+            this.wakeCallerWaitingForLease();
+
+            return;
+        }
+
         if (this.closing) {
             await Promise.allSettled([channel.close()]);
             this.shutdownWaiter.done();
-        } else {
-            const min = this.options.min ?? 10;
+            this.wakeCallerWaitingForLease();
 
-            if (this.pool.length > min) {
-                await Promise.allSettled([channel.close()]);
-                this.shutdownWaiter.done();
-            } else {
-                this.pool.push(channel);
-                this.shutdownWaiter.done();
+            return;
+        }
 
-                const blocker = this.blockers.shift();
+        const min = this.options.min ?? 10;
 
-                if (blocker !== undefined) {
-                    blocker.resolve();
-                }
+        if (this.pool.length > min) {
+            await Promise.allSettled([channel.close()]);
+            this.shutdownWaiter.done();
+            this.wakeCallerWaitingForLease();
+
+            return;
+        }
+
+        this.pool.push(channel);
+        this.shutdownWaiter.done();
+        this.wakeCallerWaitingForLease();
+    }
+
+    /**
+     * Callers park here when every lease is taken, so what they are waiting on is a lease coming
+     * free rather than a channel arriving in the pool. Those differ whenever a channel is released
+     * without being pooled, which is every release during a connection drop: without a wake, a
+     * caller waits out its whole timeout and reports an exhausted pool that is in fact empty.
+     */
+    private wakeCallerWaitingForLease(): void {
+        this.blockers.shift()?.resolve();
+    }
+
+    /**
+     * A channel can close while it sits idle in the pool, and the close event that removes it
+     * arrives on its own turn of the event loop. Skipping the dead ones here keeps a caller from
+     * ever being handed one, whichever happens first.
+     */
+    private takeFromPool(): ConfirmChannel | undefined {
+        while (this.pool.length > 0) {
+            const channel = this.pool.shift();
+
+            if (channel !== undefined && this.usable.has(channel)) {
+                return channel;
             }
+        }
+
+        return undefined;
+    }
+
+    private discardFromPool(channel: ConfirmChannel): void {
+        const position = this.pool.indexOf(channel);
+
+        if (position !== -1) {
+            this.pool.splice(position, 1);
         }
     }
 
@@ -174,7 +245,15 @@ export class AMQPChannelPool {
 
     async close(timeout?: number): Promise<void> {
         this.closing = true;
-        await Promise.allSettled(this.pool.map(channel => channel.close()));
+        const pooled = this.pool;
+        this.pool = [];
+
+        /**
+         * Closing a channel whose connection already went down rejects with "Channel closed".
+         * Settling those rejections is what keeps a broker outage during shutdown from ending the
+         * process on an unhandled rejection instead of closing the pool.
+         */
+        await Promise.allSettled(pooled.map(channel => channel.close()));
         await this.shutdownWaiter.wait(timeout);
     }
 }
