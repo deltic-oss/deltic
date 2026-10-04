@@ -6,6 +6,8 @@ import {pgTestCredentials} from '../../../pg-credentials.js';
 import {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {AnyMessageFrom} from '@deltic/messaging';
 import {LinearBackoffStrategy} from '@deltic/backoff/linear';
+import {ExponentialBackoffStrategy} from '@deltic/backoff/exponential';
+import {MaxAttemptsExceeded} from '@deltic/backoff';
 import {CollectingMessageDispatcher} from '@deltic/messaging/collecting-message-dispatcher';
 import {OutboxMessageDispatcher, OutboxRelay} from '@deltic/messaging/outbox';
 
@@ -189,5 +191,53 @@ describe('Delayed Outbox Repository', () => {
         expect(pendingLeft).toEqual(5);
         expect(consumedLeft).toEqual(4);
         expect(secondClean).toEqual(4);
+    });
+
+    test('the delay grows with every re-persist of the same message', async () => {
+        await dispatcher.send(createMessage('ping', 1));
+        testClock.advance(10_000);
+
+        const [firstAttempt] = await collect(repository.retrieveBatch(10));
+        await repository.markConsumed([firstAttempt]);
+        await repository.persist([firstAttempt]);
+        testClock.advance(10_000);
+
+        const pending = await collect(repository.retrieveBatch(10));
+
+        expect(firstAttempt.headers['attempt']).toEqual(1);
+        expect(pending.map(m => m.headers['attempt'])).toEqual([2]);
+    });
+
+    /**
+     * A bounded strategy is how retrying is stopped: once the ceiling is passed the
+     * strategy refuses to produce a delay, so the message cannot be scheduled again.
+     */
+    test('a bounded backoff strategy refuses to schedule another attempt past its ceiling', async () => {
+        const bounded = new DelayedOutboxRepositoryUsingPg<ExampleStream>(
+            asyncPool,
+            'delayed_outbox',
+            new ExponentialBackoffStrategy(1000, 2),
+            testClock,
+        );
+
+        await expect(bounded.persist([createMessage('ping', 1, {attempt: 3})])).rejects.toThrow(MaxAttemptsExceeded);
+        expect(await bounded.numberOfPendingMessages()).toEqual(0);
+    });
+
+    /**
+     * The attempt header travels inside the message payload, so for messages that came
+     * in over a broker it is producer-controlled. A value that is not a finite number
+     * makes the computed delay NaN, which Postgres rejects as an invalid timestamp —
+     * taking down the persist of the whole batch, including the healthy messages in it.
+     *
+     * see .claude-work/issues/messaging-attempt-header-not-validated.md
+     */
+    it.fails('a message with an unusable attempt header does not break the batch it is in', async () => {
+        await expect(repository.persist([
+            createMessage('ping', 1, {attempt: 'not-a-number'}),
+            createMessage('pong', 2),
+        ])).resolves.toBeUndefined();
+
+        expect(await repository.numberOfPendingMessages()).toEqual(2);
     });
 });
