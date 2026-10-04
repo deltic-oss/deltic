@@ -15,7 +15,7 @@ The standard `pg.Pool` gives you connections and releases them. It doesn't help 
 
 ```typescript
 const asyncPool = new AsyncPgPool(pgPool, {
-    onClaim: client => client.query(`SET app.tenant_id = '${tenantId}'`),
+    onClaim: client => client.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]),
     onRelease: 'RESET app.tenant_id',
 });
 
@@ -184,7 +184,10 @@ Hooks run on every connection claim/release, making them ideal for multi-tenant 
 ```typescript
 const asyncPool = new AsyncPgPool(pgPool, {
     onClaim: async (client) => {
-        await client.query(`SET app.tenant_id = '${tenantId}'`);
+        // Bind the tenant id as a parameter. `SET` cannot take parameters, and interpolating the
+        // id into the statement instead would let a hostile tenant id escape the string and run
+        // its own SQL — a full row-level-security bypass.
+        await client.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]);
     },
     onRelease: 'RESET app.tenant_id',
     keepConnections: 2,

@@ -125,6 +125,12 @@ try {
 }
 ```
 
+A second `begin()` waits for the active transaction to be finalised — that is what lets two
+concurrent flows share a context. It also means a flow must never `await` a transaction it would
+itself have to finalise, because nothing can break that deadlock. Compose with `runInTransaction`,
+which joins the active transaction instead of opening a second one, and set the pool's
+`transactionWaitTimeoutMs` to turn a mistaken wait into an error rather than a hang.
+
 #### Using `runInTransaction`
 
 For simpler transaction handling with automatic commit/rollback:
@@ -240,7 +246,7 @@ Because connections flow through `AsyncPgPool`, you get all its features:
 ```typescript
 const asyncPool = new AsyncPgPool(pgPool, {
     // Run on every connection claim
-    onClaim: client => client.query(`SET app.tenant_id = '${tenantId}'`),
+    onClaim: client => client.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]),
     // Run on every connection release
     onRelease: 'RESET app.tenant_id',
     // Keep connections warm
@@ -253,6 +259,16 @@ const db = new AsyncDrizzleConnectionProvider(asyncPool, {schema});
 // Queries automatically get tenant_id set
 const users = await db.connection().select().from(usersTable);
 ```
+
+### Concurrency Within One Flow
+
+Under the pool's default `keepPrimaryConnection: true`, every lazy query in a flow runs on the
+flow's one shared connection. Queries issued concurrently — `Promise.all` over repository calls —
+therefore run one after the other in issue order, not in parallel; there is nothing to gain from
+fanning out inside a flow. This currently relies on the `pg` driver queueing concurrent queries per
+client, which `pg` has deprecated. With `keepPrimaryConnection: false`, each lazy query outside a
+transaction claims its own connection and runs genuinely in parallel; inside a transaction queries
+share the transaction's connection by definition.
 
 ## License
 

@@ -185,16 +185,19 @@ console.log(query.toString());
 
 ### Raw Client Access
 
-When you need direct access to the underlying pg client:
+When you need direct access to an underlying pg client — a `LISTEN` loop, for instance — claim one
+from the `AsyncPgPool` the provider was built on. Note that a claimed connection is dedicated: it is
+*not* the ambient connection, so it does not participate in an active transaction, and it must be
+released in a `finally`.
 
 ```typescript
-const client = await db.claimClient();
+const client = await asyncPool.claim();
 
 try {
     await client.query('LISTEN my_channel');
     // ... do something with notifications
 } finally {
-    await db.releaseClient(client);
+    await asyncPool.release(client);
 }
 ```
 
@@ -221,8 +224,6 @@ new AsyncKnexConnectionProvider(pool: AsyncPgPool, options?: {
 | `withTransaction()` | Returns the current transaction (throws if none) |
 | `inTransaction()` | Returns `true` if currently in a transaction |
 | `runInTransaction(fn)` | Runs a function in a transaction with auto commit/rollback |
-| `claimClient()` | Claims a raw pg `Client` from the pool |
-| `releaseClient(client)` | Releases a raw pg `Client` back to the pool |
 | `destroy()` | Destroys the Knex instance |
 
 ### `Connection`
@@ -260,7 +261,7 @@ Because connections flow through `AsyncPgPool`, you get all its features:
 ```typescript
 const asyncPool = new AsyncPgPool(pgPool, {
     // Run on every connection claim
-    onClaim: client => client.query(`SET app.tenant_id = '${tenantId}'`),
+    onClaim: client => client.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]),
     // Run on every connection release  
     onRelease: 'RESET app.tenant_id',
     // Keep connections warm
