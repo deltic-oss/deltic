@@ -54,6 +54,22 @@ const orderIdGenerator = ulidPrefixedBrandedIdGenerator('order');
 const orderId = orderIdGenerator.generateId(); // 'order_01ARZ3NDEKTSV4RRFFQ69G5FAV'
 ```
 
+### Ordering guarantees
+
+Both id kinds are time-prefixed, so ids sort by creation time *across* milliseconds. Within one
+millisecond they differ:
+
+- **UUID v7** ids are strictly monotonic: ids generated in a burst carry an increasing counter, so
+  their order matches generation order — even when the clock is adjusted backwards. The trade-off is
+  that consecutive ids in a burst differ by a single increment, so one id reveals its neighbours;
+  don't use these where guessability matters (they are ids, not tokens).
+- **ULID** ids draw fresh randomness per id, so ids generated within the same millisecond are in
+  *random* order, and a backwards clock adjustment produces ids that sort before earlier ones. In
+  exchange, nothing about one id follows from another.
+
+Pick by what the id is for: v7 when insertion order must be reconstructable from the id, ULID when
+ids stand on their own.
+
 ### ID Validation
 
 ```typescript
