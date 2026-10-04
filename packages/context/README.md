@@ -104,26 +104,55 @@ tenantId.mustResolve();  // string (throws if undefined)
 tenantId.preventMismatch('acme'); // throws if current value !== 'acme'
 ```
 
+### Writing requires a scope
+
+`attach()` — and `use()`/`forget()`, which build on it — write into the scope that is currently
+active. Outside a `run()` there is nothing to write into, so they throw `UnableToAttachContext`
+(`context.no_active_scope`) rather than accept the values and drop them:
+
+```typescript
+tenantId.use('acme');       // throws: there is no scope to write to
+
+await context.run(async () => {
+    tenantId.use('acme');   // fine
+});
+```
+
+Reading outside a scope stays legal: `context()` answers `{}`, `get()` answers `undefined` and
+`mustResolve()` throws `UnableToResolveValue`.
+
 ### Testing
 
-Use `composeContextSlotsForTesting` to create a context pre-initialized with defaults:
+Use `composeContextSlotsForTesting` to create a context pre-initialized with defaults. It is backed
+by a memory store that always holds an object, so values can be prepared with `attach()` before
+entering a scope — which is the way to set up context without wrapping the test in a `run()`:
 
 ```typescript
 import {composeContextSlotsForTesting} from '@deltic/context';
 
 const context = composeContextSlotsForTesting([tenantSlot, userSlot]);
+
+context.attach({tenant_id: 'acme'});
 ```
 
 ## API Reference
 
 ### `Context<C>`
 
+Constructed as `new Context(store, createContextValue?, defaults?)`.
+
+| Constructor argument | Description |
+|----------------------|-------------|
+| `store` | The `ContextStore` backing the scope, typically an `AsyncLocalStorage` |
+| `createContextValue` | Merge strategy for inherited and provided values, defaults to a shallow merge |
+| `defaults` | Values every scope starts with, unless the run or a surrounding scope provides its own |
+
 | Method | Description |
 |--------|-------------|
 | `run(fn, context?)` | Runs a function within a context scope. Values merge with inherited context |
-| `attach(context)` | Merges values into the current context (mutates) |
+| `attach(context)` | Merges values into the current context (mutates). Throws `UnableToAttachContext` outside a scope |
 | `get(key)` | Returns a context value or `undefined` |
-| `context()` | Returns the full context object |
+| `context()` | Returns the full context object, `{}` outside a scope |
 
 ### `ContextStore<C>` (interface)
 
@@ -145,8 +174,8 @@ Composes multiple slots into a single `Context`. Slots with `defaultValue` are a
 |--------|-------------|
 | `resolve()` | Returns the value or `undefined` |
 | `mustResolve()` | Returns the value or throws `UnableToResolveValue` |
-| `use(value)` | Sets the value |
-| `forget()` | Clears the value |
+| `use(value)` | Sets the value. The context-backed implementation needs an active scope |
+| `forget()` | Clears the value. The context-backed implementation needs an active scope |
 | `preventMismatch(value)` | Throws `ContextMismatchDetected` if the current value differs |
 
 ## License
