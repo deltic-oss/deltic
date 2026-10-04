@@ -49,8 +49,12 @@ export type ServiceKey<Service> = string & {
 };
 
 export class DependencyContainer {
-    private cache: Record<string, any> = {};
-    private definitions: Record<string, ServiceDefinition> = {};
+    // Maps rather than plain objects: an object registry walks Object.prototype, so a service
+    // named `toString` or `valueOf` was reported as "already registered" on an empty container,
+    // and resolving an unregistered name that Object.prototype carries returned a native function
+    // instead of throwing.
+    private readonly cache = new Map<string, any>();
+    private readonly definitions = new Map<string, ServiceDefinition>();
 
     // Services that take part in the cleanup graph, see ResolvedService
     private readonly resolved = new Map<string, ResolvedService>();
@@ -72,7 +76,7 @@ export class DependencyContainer {
         key: Key,
         definition: ServiceDefinition<Service>,
     ): ServiceKey<Service> {
-        if (this.definitions[key] !== undefined) {
+        if (this.definitions.has(key)) {
             throw new Error(`Dependency ${key} is already registered`);
         }
 
@@ -84,7 +88,7 @@ export class DependencyContainer {
             definition.factory = () => proxy;
         }
 
-        this.definitions[key] = definition;
+        this.definitions.set(key, definition);
 
         return key as unknown as ServiceKey<Service>;
     }
@@ -102,7 +106,7 @@ export class DependencyContainer {
             );
         }
 
-        this.cache = {};
+        this.cache.clear();
         this.resolved.clear();
         this.transparentDependencies.clear();
     }
@@ -231,16 +235,16 @@ export class DependencyContainer {
         key: string | ServiceKey<Service>,
         definition: InstanceDefinition<Service>,
     ): ServiceKey<Service> {
-        if (this.definitions[key] !== undefined) {
+        if (this.definitions.has(key)) {
             throw new Error(`Dependency ${key} is already registered`);
         }
 
         const {cleanup, instance} = definition;
-        this.cache[key] = instance;
-        this.definitions[key] = {
+        this.cache.set(key, instance);
+        this.definitions.set(key, {
             ...definition,
             factory: () => instance,
-        };
+        });
 
         if (cleanup) {
             this.trackService(key, cleanup).instance = instance;
@@ -279,10 +283,9 @@ export class DependencyContainer {
     ): Service {
         const {factory, cache = true, cleanup} = definition;
         const resolveInstance = () => {
-            const cached = this.cache[key];
-
-            if (cached) {
-                return cached;
+            // `has` rather than truthiness, so an intentionally falsy instance is cached too.
+            if (this.cache.has(key)) {
+                return this.cache.get(key);
             }
 
             // Proxied services always take part in the cleanup graph, see resolveLazy. The
@@ -296,7 +299,7 @@ export class DependencyContainer {
             resolved.instance = instance;
 
             if (cache) {
-                this.cache[key] = instance;
+                this.cache.set(key, instance);
             }
 
             return instance;
@@ -320,7 +323,7 @@ export class DependencyContainer {
     }
 
     resolveLazy<Service extends object>(key: ServiceKey<Service>): Service {
-        const definition = this.definitions[key];
+        const definition = this.definitions.get(key);
 
         if (!definition) {
             throw new Error(`No definition found for key "${key}".`);
@@ -343,15 +346,14 @@ export class DependencyContainer {
             return this.resolveLazy<Service>(key);
         }
 
-        const cached = this.cache[key];
-
-        if (cached) {
+        // `has` rather than truthiness, so an intentionally falsy instance is cached too.
+        if (this.cache.has(key)) {
             this.recordCachedDependencies(key);
 
-            return cached;
+            return this.cache.get(key);
         }
 
-        const definition = this.definitions[key] as ServiceDefinition<Service>;
+        const definition = this.definitions.get(key) as ServiceDefinition<Service> | undefined;
 
         if (definition === undefined) {
             throw new Error(`No definition found for key "${key}".`);
@@ -381,7 +383,7 @@ export class DependencyContainer {
                 resolved.instance = instance;
             }
 
-            this.cache[key] = instance;
+            this.cache.set(key, instance);
         }
 
         return instance;
