@@ -125,8 +125,12 @@ const converter = new Crc32LockIdConverter({base: 1000000, range: 999999});
 
 ### Error Classes
 
-- `UnableToAcquireLock` — thrown when a lock cannot be acquired within the timeout
-- `UnableToReleaseLock` — thrown when a lock release fails
+- `UnableToAcquireLock` — thrown when a lock cannot be acquired within the timeout, or when the
+  backend fails while acquiring it. With PostgreSQL this includes a `tryLock` that did not get the
+  lock and whose connection the pool then refused to take back (a failing `onRelease` hook).
+- `UnableToReleaseLock` — thrown when a lock release fails. With PostgreSQL this includes a lock
+  that was released but whose connection the pool refused to take back. The underlying failure is
+  the error's `cause`; a connection is handed back to the pool once, whatever happens.
 
 ## License
 

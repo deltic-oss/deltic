@@ -7,7 +7,12 @@ interface LockWaiter {
 
 export class MutexUsingMemory<LockID extends LockValue> implements DynamicMutex<LockID> {
     private readonly locks = new Map<LockID, true>();
-    private waiters: LockWaiter[] = [];
+    /**
+     * Waiters per lock id. One shared queue used to serve every id, which meant releasing one lock
+     * id woke a waiter for a *different* id while that id's holder was still running — mutual
+     * exclusion broke as soon as two lock ids were contended at the same time.
+     */
+    private readonly waiters = new Map<LockID, LockWaiter[]>();
 
     lock(id: LockID, timeout?: number): Promise<void> {
         if (this.tryLockSync(id)) {
@@ -19,7 +24,9 @@ export class MutexUsingMemory<LockID extends LockValue> implements DynamicMutex<
             done: false,
             promise: promise,
         };
-        this.waiters.push(lockWaiter);
+        const queue = this.waiters.get(id) ?? [];
+        queue.push(lockWaiter);
+        this.waiters.set(id, queue);
         let timer: ReturnType<typeof setTimeout> | undefined = undefined;
 
         if (timeout !== undefined) {
@@ -34,6 +41,7 @@ export class MutexUsingMemory<LockID extends LockValue> implements DynamicMutex<
                 lockWaiter.done = true;
             },
             reason => {
+                clearTimeout(timer);
                 lockWaiter.done = true;
                 throw UnableToAcquireLock.becauseOfError(id, reason);
             },
@@ -59,13 +67,20 @@ export class MutexUsingMemory<LockID extends LockValue> implements DynamicMutex<
             throw UnableToReleaseLock.becauseOfError(id, 'Lock ID does not exist.');
         }
 
-        let waiter = this.waiters.shift();
+        const queue = this.waiters.get(id) ?? [];
+        let waiter = queue.shift();
 
+        // A waiter whose wait already ended — timed out, usually — must not receive the lock.
         while (waiter && waiter.done) {
-            waiter = this.waiters.shift();
+            waiter = queue.shift();
+        }
+
+        if (queue.length === 0) {
+            this.waiters.delete(id);
         }
 
         if (waiter) {
+            // The lock stays held; it moves to the waiter.
             waiter.promise.resolve();
         } else {
             this.locks.delete(id);

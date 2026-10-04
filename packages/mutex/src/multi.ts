@@ -1,4 +1,4 @@
-import type {LockValue, DynamicMutex} from './index.js';
+import {type LockValue, type DynamicMutex, UnableToReleaseLock} from './index.js';
 
 export class MultiMutex<LockID extends LockValue> implements DynamicMutex<LockID> {
     constructor(private readonly mutexes: DynamicMutex<LockID>[]) {}
@@ -16,13 +16,16 @@ export class MultiMutex<LockID extends LockValue> implements DynamicMutex<LockID
                 lockedMutexes.unshift(mutex);
 
                 if (useTimeout) {
-                    timeLeft = timeLeft! - hrTimeToMs(process.hrtime.bigint() - start);
+                    // Never below one: a zero timeout means "wait forever" to some lock backends,
+                    // and a negative one is refused outright — an exhausted budget must do neither.
+                    timeLeft = Math.max(1, timeout! - hrTimeToMs(process.hrtime.bigint() - start));
                 }
             } catch (error) {
-                for (const lockedMutex of lockedMutexes) {
-                    await lockedMutex.unlock(id);
-                }
+                await this.unlockAll(id, lockedMutexes, 'swallow');
 
+                // The failure to acquire is what the caller must see; a failing rollback cannot
+                // mask it, and the rollback keeps going past a mutex that refuses, because leaving
+                // an earlier lock held for ever is worse than an unreported cleanup failure.
                 throw error;
             }
         }
@@ -51,19 +54,50 @@ export class MultiMutex<LockID extends LockValue> implements DynamicMutex<LockID
             return true;
         }
 
-        for (const lockedMutex of lockedMutexes) {
-            await lockedMutex.unlock(id);
-        }
+        await this.unlockAll(id, lockedMutexes, 'swallow');
 
         return false;
     }
 
     async unlock(id: LockID): Promise<void> {
         // Mutexes are unlocked in reverse order
-        for (let i = this.mutexes.length - 1; i >= 0; i--) {
-            const mutex = this.mutexes[i];
-            await mutex.unlock(id);
+        await this.unlockAll(id, [...this.mutexes].reverse(), 'report');
+    }
+
+    /**
+     * Unlock every given mutex, letting no failure stop the ones behind it. Composed mutexes are
+     * different backends — an in-memory guard in front of a database lock, for instance — and a
+     * transient failure of one backend must not leave the others held for ever.
+     */
+    private async unlockAll(
+        id: LockID,
+        mutexes: DynamicMutex<LockID>[],
+        failures: 'report' | 'swallow',
+    ): Promise<void> {
+        const collected: unknown[] = [];
+
+        for (const mutex of mutexes) {
+            try {
+                await mutex.unlock(id);
+            } catch (e) {
+                collected.push(e);
+            }
         }
+
+        if (failures === 'swallow' || collected.length === 0) {
+            return;
+        }
+
+        if (collected.length === 1) {
+            throw collected[0];
+        }
+
+        // Wrapped rather than thrown as a bare AggregateError, so a caller that distinguishes
+        // release failures by type keeps working when more than one backend refused.
+        throw UnableToReleaseLock.becauseOfError(
+            id,
+            new AggregateError(collected, `Unable to release every mutex for lock "${id}"`),
+        );
     }
 }
 
