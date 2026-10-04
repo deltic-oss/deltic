@@ -167,11 +167,23 @@ import {OutboxRelayRunner} from '@deltic/messaging/pg/outbox-relay-runner';
 Dispatch messages to RabbitMQ:
 
 ```typescript
-import {AsyncConnectionProvider} from '@deltic/messaging/amqp/connection-provider';
-import {ChannelPool} from '@deltic/messaging/amqp/channel-pool';
-import {AmqpMessageDispatcher} from '@deltic/messaging/amqp/message-dispatcher';
-import {AmqpMessageRelay} from '@deltic/messaging/amqp/message-relay';
+import {AMQPConnectionProvider} from '@deltic/messaging/amqp/connection-provider';
+import {AMQPChannelPool} from '@deltic/messaging/amqp/channel-pool';
+import {AMQPMessageDispatcher} from '@deltic/messaging/amqp/message-dispatcher';
+import {AMQPMessageRelay} from '@deltic/messaging/amqp/message-relay';
 ```
+
+When the connection drops, the channel pool stops handing out the channels that died with it and
+opens new ones on a fresh connection, and a relay re-attaches its consumers; a relay that cannot
+start consuming (a queue that does not exist yet, for instance) retries once a second. Reaching the
+broker is retried for at most `healingTimeout` milliseconds of continuous failure (60 seconds by
+default, an `AMQPConnectionProviderOptions` option), and a broker that rejects every configured
+credential is not retried at all. Both give-ups are unrecoverable errors (`UnableToHealAMQPConnection`,
+`UnableToAuthenticateWithAMQP`, recognised by `isUnrecoverableError` from `@deltic/error-standard`):
+the dispatcher passes them on unwrapped instead of spending its remaining tries, and a relay ends
+its run with them — `start()` rejects — so the process can exit and be restarted. A caller that
+must not wait out the healing window, such as one serving a request, bounds each attempt with the
+pool's `connectionTimeout`, which fails with an ordinary `UnableToEstablishConnection`.
 
 ### Upcasting
 

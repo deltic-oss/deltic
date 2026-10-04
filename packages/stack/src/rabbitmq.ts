@@ -43,7 +43,9 @@ export interface RabbitMQConfig {
 
     /**
      * Optional configuration for the AMQP connection provider.
-     * Allows customizing heartbeat interval and backoff strategy.
+     * Allows customizing heartbeat interval, backoff strategy and healing timeout: how long
+     * the provider keeps retrying an unreachable broker (60 seconds by default) before it
+     * gives up with an unrecoverable error, which ends running relays.
      */
     connectionOptions?: AMQPConnectionProviderOptions;
 
@@ -266,7 +268,9 @@ export interface RabbitMQRelayServices<Stream extends StreamDefinition> {
  *
  * The relay supports:
  * - Partitioned concurrent processing (ordered per aggregate root)
- * - Automatic reconnection on channel failure
+ * - Automatic reconnection on channel failure, retrying a failed start (such as a queue
+ *   that does not exist yet) once a second
+ * - Ending the run — `start()` rejects — once the connection provider gives up on the broker
  * - Dead-lettering after max delivery attempts
  * - Graceful shutdown via container cleanup
  *
