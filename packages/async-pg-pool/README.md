@@ -68,6 +68,13 @@ const conn2 = await asyncPool.primary(); // same connection as conn
 await conn2.query('SELECT pg_advisory_unlock(12345)');
 ```
 
+Because one connection serves the whole flow, queries a flow issues *concurrently* — a
+`Promise.all` over repository calls, say — all land on the same client and run one after the
+other, in issue order. There is no parallelism to gain from fanning out inside a flow. This
+currently rides on the `pg` driver queueing concurrent queries per client, which `pg` has
+deprecated and pg@9 will remove; with `keepPrimaryConnection: false` every `primary()` call claims
+its own connection and neither the serialisation nor the driver dependency applies.
+
 ### Transactions
 
 Transactions acquire a dedicated connection and track it in the async context:
@@ -99,6 +106,23 @@ await asyncPool.runInTransaction(async () => {
 
 Nested calls to `runInTransaction` reuse the existing transaction.
 
+#### Transaction outcomes are verified
+
+`commit()` believes the server, not the query. When a statement inside a transaction failed and its
+error was handled by the caller — an upsert conflict caught by hand, for instance — PostgreSQL has
+already aborted the transaction, and a `COMMIT` sent to it is answered with a `ROLLBACK` command
+tag: every statement in it is discarded, while the COMMIT query itself succeeds. `commit()` inspects
+that tag and rejects with `UnableToCommitTransaction`, so lost work is reported instead of being
+mistaken for success.
+
+Errors keep their identity through the transaction helpers. A failing `COMMIT` — a deferred
+constraint, a serialization failure — reaches the caller as itself, with its SQLSTATE `code` intact,
+so retry-on-`40001` loops work. A failing `ROLLBACK` never replaces the error that made the unit of
+work fail. And the manual pattern above is safe: a compensating `rollback()` after a commit that
+failed is a no-op, because the transaction already ended without committing. A rollback after a
+*successful* commit, or a second rollback, still throws — both mean the caller wants something that
+can no longer be true.
+
 #### Custom Isolation Levels
 
 ```typescript
@@ -127,6 +151,30 @@ await asyncPool.runInIsolatedTransaction(async () => {
     const conn = await asyncPool.primary();
     await conn.query('...');
 }); // auto-committed and connections released
+```
+
+#### The default context is for a single flow
+
+`new AsyncPgPool(pool)` without a context argument stores its state in one process-wide,
+memory-backed context. That is convenient for a script, a test, or any other single logical flow —
+but it is **not safe for concurrent flows**: two overlapping requests would share one transaction
+slot and one primary connection, and can observe — or roll back — each other's work.
+
+Anything that serves concurrent flows must pass a context backed by `AsyncLocalStorage`, and run
+each flow inside a scope of its own:
+
+```typescript
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {composeContextSlots} from '@deltic/context';
+import {AsyncPgPool, asyncPgPoolContextSlot, asyncPoolContext} from '@deltic/async-pg-pool';
+
+const context = composeContextSlots([asyncPgPoolContextSlot], new AsyncLocalStorage());
+const asyncPool = new AsyncPgPool(pgPool, {}, context);
+
+// per request / message:
+await context.run(async () => {
+    // ... handle the request
+}, {async_pg_pool: asyncPoolContext()});
 ```
 
 ### Connection Lifecycle Hooks
@@ -159,12 +207,15 @@ new AsyncPgPool(pool: Pool, options?: AsyncPgPoolOptions)
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `keepConnections` | `number` | `0` | Number of idle connections to retain |
+| `keepPrimaryConnection` | `boolean` | `true` | Cache one connection per context for `primary()` |
+| `lockAfterFlush` | `boolean` | `true` | Refuse database operations once the context is flushed |
 | `maxIdleMs` | `number` | `1000` | Milliseconds before idle connections are closed |
 | `onClaim` | `(client) => any` | — | Hook called when a connection is claimed |
 | `onRelease` | `string \| function` | — | Hook called on release (string = SQL query) |
 | `releaseHookOnError` | `boolean` | `false` | Run `onRelease` even when releasing due to error |
 | `freshResetQuery` | `string` | — | SQL to reset connection state for `claimFresh()` |
 | `beginQuery` | `string` | `'BEGIN'` | SQL to begin transactions |
+| `transactionWaitTimeoutMs` | `number` | — | How long `begin()` may queue behind an active transaction. Unset waits indefinitely; setting it turns a self-deadlock — awaiting a second `begin()` in the flow that holds the transaction — into an error |
 
 #### Methods
 
@@ -182,7 +233,78 @@ new AsyncPgPool(pool: Pool, options?: AsyncPgPoolOptions)
 | `runInTransaction(fn)` | Runs a function in a transaction with auto commit/rollback |
 | `runInIsolation(fn)` | Runs a function in an isolated connection context |
 | `runInIsolatedTransaction(fn)` | Combines isolation and transaction management |
-| `flushSharedContext()` | Releases all connections in the current context |
+| `flush()` | Ends the context, expecting nothing outstanding. Rejects if a transaction was left open |
+| `abandon()` | Ends the context whatever state it is in. Never waits, never rejects |
+| `flushSharedContext()` | Deprecated alias for `flush()` |
+
+### Ending a context
+
+Which of the two you want depends on whether you control the end of the scope.
+
+`flush()` is for a scope with a deterministic owner — a unit of work, a message consumer, a test.
+It releases every connection the context still holds and **rejects** if a transaction was never
+committed or rolled back, because in a scope you control that is a bug worth hearing about. It rolls
+that transaction back first, so a reported mistake is not also a leak. `runInIsolation` calls it for
+you in a `finally`.
+
+`abandon()` is for a scope whose end is not in your hands. The motivating case is an HTTP request:
+there is no reliable moment after the handler, because `finish` does not fire when a client
+disconnects, `close` fires while the handler may still be running, and Express — including v5 —
+gives you no awaitable handler-completion signal. So `abandon()` **waits for nothing and rejects for
+nothing**, which makes it safe to call from a socket close handler, a deadline timer or a signal
+handler. What it had to clean up comes back as a value instead of an exception:
+
+```typescript
+const outcome = await asyncPool.abandon();
+
+if (outcome.openTransaction === 'left-open') {
+    // A transaction outlived the code that opened it. Usually the handler is simply still running
+    // and will commit; worth a metric so a persistent one shows up as the leak it is.
+    logger.warn('abandoned a scope with an open transaction', outcome);
+}
+```
+
+**A client disconnecting does not stop the handler.** Node runs it to completion, so a request that
+was mid-transaction when the socket closed will still commit. `abandon()` therefore does **not** roll
+an open transaction back by default — doing so would throw away work the handler is about to commit.
+It leaves the transaction and its connection to the handler that owns them, and reports
+`openTransaction: 'left-open'`. The connection is reclaimed when the handler finishes, the same as
+for a request that was never interrupted.
+
+When reclaiming the connection matters more than the in-flight work — a hard deadline, where a
+handler has had its grace period and is presumed stuck — pass `rollbackOpenTransaction`:
+
+```typescript
+import {AsyncResource} from 'node:async_hooks';
+
+// soft: the client is gone, but let a still-running handler finish and commit
+res.on('close', AsyncResource.bind(() => void asyncPool.abandon()));
+
+// hard: the handler has had long enough; take the connection back
+const deadline = setTimeout(() => void asyncPool.abandon({rollbackOpenTransaction: true}), 30_000);
+```
+
+Register the listener from inside the request's scope and bind it with `AsyncResource.bind`.
+`abandon()` ends the scope of the flow it is called from, and a response's `close` event is emitted
+by the socket, which existed before the request's scope did. On a client disconnect — the case this
+is for — an unbound listener runs with no scope at all, so `abandon()` finds nothing to end and
+reports `openTransaction: 'none'` while the request's connections stay checked out. A timer keeps
+the scope it was created in, so the deadline needs no binding as long as it is armed inside the
+scope; armed from within the `close` listener, it inherits whatever that listener runs in.
+
+The same holds for anything else that reaches the pool from an event listener. A pooled
+connection's own `error`, `end` and `notification` events run on the async chain its socket was
+created on — usually some other flow's — so a listener that releases the connection or queries the
+pool has to be bound to the flow that claimed it.
+
+Calling `abandon()` twice, or after a `flush()`, is harmless and reports nothing left to do.
+
+A note on avoiding the problem rather than handling it: with `keepPrimaryConnection: false` and
+`keepConnections: 0`, nothing is cached for the life of the context and every query releases its own
+connection, so a scope that never opens a transaction has nothing to clean up at all. That is the
+recommended configuration where scope teardown is not deterministic. The corollary is that under it
+a transaction must always be opened through `runInTransaction` or `runInIsolatedTransaction`, never
+a bare `begin()`, because only those have a `finally` of their own.
 
 ### `TransactionManagerUsingPg`
 
