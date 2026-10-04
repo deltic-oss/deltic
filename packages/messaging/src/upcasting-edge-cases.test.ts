@@ -44,6 +44,43 @@ describe('Upcasting Edge Cases', () => {
         expect(collector.messages[0].payload).toEqual({data: 'test'});
     });
 
+    /**
+     * A relay deserialises whatever the broker hands it, so the message type is
+     * producer-controlled. Types that happen to name a property of Object.prototype
+     * must be treated like any other unknown type: passed through untouched.
+     *
+     * see .claude-work/issues/messaging-message-type-used-as-unguarded-object-key.md
+     */
+    it.fails('a message type that names an Object property is passed through unchanged', async () => {
+        const collector = new CollectingMessageConsumer<TestVersionedStream>();
+        const consumer = new VersionedMessageConsumer<TestVersionedStream>(testUpcasters, collector);
+        const message = {
+            type: 'constructor',
+            payload: {username: 'test'},
+            headers: {},
+        } as unknown as AnyMessageFrom<TestVersionedStream>;
+
+        await consumer.consume(message);
+
+        expect(collector.messages).toEqual([message]);
+    });
+
+    /**
+     * see .claude-work/issues/messaging-message-type-used-as-unguarded-object-key.md
+     */
+    it.fails('a message type that names an Object property gets no schema version', () => {
+        const decorator = new SchemaVersionMessageDecorator<TestVersionedStream>(testUpcasters);
+        const message = {
+            type: 'toString',
+            payload: {username: 'test'},
+            headers: {},
+        } as unknown as AnyMessageFrom<TestVersionedStream>;
+
+        const [decorated] = decorator.decorate([message]);
+
+        expect(decorated.headers['schema_version']).toBeUndefined();
+    });
+
     test('preserves message identity through upcasting', async () => {
         const collector = new CollectingMessageConsumer<TestVersionedStream>();
         const consumer = new VersionedMessageConsumer<TestVersionedStream>(testUpcasters, collector);
