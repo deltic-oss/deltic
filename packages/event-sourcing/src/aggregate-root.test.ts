@@ -176,6 +176,33 @@ describe.each([
         });
     });
 
+    test('Causing an error that is expected by its type', async () => {
+        expectError(TypeError);
+        await whenAggregate(async ({aggregateRoot}) => {
+            aggregateRoot.throwAnError(new TypeError('what the hell'));
+        });
+    });
+
+    test('A command that records nothing emits no events, even after one that did', async () => {
+        await when('add_member', {id, member: frank});
+        then(createMessage('member_was_added', frank));
+
+        await when('add_member', {id, member: frank});
+        then();
+    });
+
+    test('An aggregate action that records nothing emits no events, even after one that did', async () => {
+        await whenAggregate(async ({aggregateRoot}) => {
+            aggregateRoot.addMember(frank);
+        });
+        then(createMessage('member_was_added', frank));
+
+        await whenAggregate(async ({aggregateRoot}) => {
+            aggregateRoot.addMember(frank);
+        });
+        then();
+    });
+
     test('Fetching an entity at a specific version', async () => {
         given(createMessage('member_was_added', frank), createMessage('member_was_added', renske));
 
