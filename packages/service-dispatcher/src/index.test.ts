@@ -1,4 +1,5 @@
-import {ServiceDispatcher} from './index.js';
+import {InputNotSupported, ServiceDispatcher, type ServiceMiddleware} from './index.js';
+import {AsyncLocalStorage} from 'node:async_hooks';
 
 interface NumberToNumber {
     value: number;
@@ -81,5 +82,259 @@ describe('@deltic/service-dispatcher', () => {
 
     test('a bus throws when input is not supported', async () => {
         await expect(exampleServiceDispatcher.handle({type: 'unknown', payload: true} as any)).rejects.toThrow();
+    });
+});
+
+interface PaymentService {
+    register_payment: {
+        payload: {reference: string; amount: number};
+        response: {reference: string};
+    };
+    refund_payment: {
+        payload: {reference: string};
+        response: {refunded: boolean};
+    };
+}
+
+describe('dispatching unsupported input', () => {
+    const dispatcher = new ServiceDispatcher<PaymentService>({
+        register_payment: async payload => ({reference: payload.reference}),
+        refund_payment: async () => ({refunded: true}),
+    });
+
+    test('rejects with a typed error naming the input type', async () => {
+        const dispatching = dispatcher.handle({type: 'cancel_payment', payload: {}} as never);
+
+        await expect(dispatching).rejects.toThrow(InputNotSupported);
+        await expect(dispatching).rejects.toThrow('Unable to handle input of type: cancel_payment');
+    });
+
+    // see .claude-work/issues/service-dispatcher-prototype-chain-handler-lookup.md
+    it.fails('rejects an input type that is only present on the prototype of the handler map', async () => {
+        for (const type of ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__']) {
+            await expect(
+                dispatcher.handle({type, payload: {reference: 'ref-1', amount: 100}} as never),
+            ).rejects.toThrow(InputNotSupported);
+        }
+    });
+});
+
+describe('dispatching through middleware', () => {
+    let handled: string[];
+
+    const handlers = {
+        register_payment: async (payload: PaymentService['register_payment']['payload']) => {
+            handled.push(`register_payment:${payload.reference}`);
+
+            return {reference: payload.reference};
+        },
+        refund_payment: async (payload: PaymentService['refund_payment']['payload']) => {
+            handled.push(`refund_payment:${payload.reference}`);
+
+            return {refunded: true};
+        },
+    };
+
+    beforeEach(() => {
+        handled = [];
+    });
+
+    test('a middleware that does not call next short-circuits the handler', async () => {
+        const dispatcher = new ServiceDispatcher<PaymentService>(handlers, [
+            async () => ({reference: 'from-cache'}),
+        ]);
+
+        const response = await dispatcher.handle({
+            type: 'register_payment',
+            payload: {reference: 'ref-1', amount: 100},
+        });
+
+        expect(response).toEqual({reference: 'from-cache'});
+        expect(handled).toEqual([]);
+    });
+
+    test('a middleware that throws prevents the handler from running', async () => {
+        const failure = new Error('not authorised');
+        const dispatcher = new ServiceDispatcher<PaymentService>(handlers, [
+            async () => {
+                throw failure;
+            },
+        ]);
+
+        await expect(
+            dispatcher.handle({type: 'register_payment', payload: {reference: 'ref-1', amount: 100}}),
+        ).rejects.toThrow(failure);
+        expect(handled).toEqual([]);
+    });
+
+    test('an error from the handler travels back up through the middleware chain', async () => {
+        const failure = new Error('payment declined');
+        const observed: string[] = [];
+        const observing: ServiceMiddleware<PaymentService> = async (input, next) => {
+            try {
+                return await next(input);
+            } catch (error) {
+                observed.push((error as Error).message);
+                throw error;
+            }
+        };
+        const dispatcher = new ServiceDispatcher<PaymentService>(
+            {
+                ...handlers,
+                register_payment: async () => {
+                    throw failure;
+                },
+            },
+            [observing, observing],
+        );
+
+        await expect(
+            dispatcher.handle({type: 'register_payment', payload: {reference: 'ref-1', amount: 100}}),
+        ).rejects.toThrow(failure);
+        expect(observed).toEqual(['payment declined', 'payment declined']);
+    });
+
+    test('a middleware can recover from a failing handler', async () => {
+        const recovering: ServiceMiddleware<PaymentService> = async (input, next) => {
+            try {
+                return await next(input);
+            } catch {
+                return {reference: 'compensated'};
+            }
+        };
+        const dispatcher = new ServiceDispatcher<PaymentService>(
+            {
+                ...handlers,
+                register_payment: async () => {
+                    throw new Error('payment declined');
+                },
+            },
+            [recovering],
+        );
+
+        const response = await dispatcher.handle({
+            type: 'register_payment',
+            payload: {reference: 'ref-1', amount: 100},
+        });
+
+        expect(response).toEqual({reference: 'compensated'});
+    });
+
+    test('the handler runs once per invocation of next', async () => {
+        const dispatcher = new ServiceDispatcher<PaymentService>(handlers, [
+            async (input, next) => {
+                await next(input);
+
+                return next(input);
+            },
+        ]);
+
+        await dispatcher.handle({type: 'register_payment', payload: {reference: 'ref-1', amount: 100}});
+
+        expect(handled).toEqual(['register_payment:ref-1', 'register_payment:ref-1']);
+    });
+
+    test('a middleware can dispatch a follow-up command through the same dispatcher', async () => {
+        const compensating: ServiceMiddleware<PaymentService> = async (input, next) => {
+            const response = await next(input);
+
+            if (input.type === 'register_payment') {
+                await dispatcher.handle({type: 'refund_payment', payload: {reference: 'ref-1'}});
+            }
+
+            return response;
+        };
+        const dispatcher: ServiceDispatcher<PaymentService> = new ServiceDispatcher<PaymentService>(handlers, [
+            compensating,
+        ]);
+
+        const response = await dispatcher.handle({
+            type: 'register_payment',
+            payload: {reference: 'ref-1', amount: 100},
+        });
+
+        expect(response).toEqual({reference: 'ref-1'});
+        expect(handled).toEqual(['register_payment:ref-1', 'refund_payment:ref-1']);
+    });
+
+    test('async context established by a middleware is visible to the handler', async () => {
+        const storage = new AsyncLocalStorage<string>();
+        let seenInHandler: string | undefined = undefined;
+        let seenInInnerMiddleware: string | undefined = undefined;
+        const dispatcher = new ServiceDispatcher<PaymentService>(
+            {
+                ...handlers,
+                register_payment: async payload => {
+                    seenInHandler = storage.getStore();
+
+                    return {reference: payload.reference};
+                },
+            },
+            [
+                (input, next) => storage.run('correlation-id', () => next(input)),
+                (input, next) => {
+                    seenInInnerMiddleware = storage.getStore();
+
+                    return next(input);
+                },
+            ],
+        );
+
+        await dispatcher.handle({type: 'register_payment', payload: {reference: 'ref-1', amount: 100}});
+
+        expect(seenInHandler).toEqual('correlation-id');
+        expect(seenInInnerMiddleware).toEqual('correlation-id');
+        expect(storage.getStore()).toBeUndefined();
+    });
+
+    test('concurrent dispatches do not leak input between each other', async () => {
+        const seenByMiddleware: string[] = [];
+        const dispatcher = new ServiceDispatcher<PaymentService>(
+            {
+                ...handlers,
+                register_payment: async payload => {
+                    await Promise.resolve();
+
+                    return {reference: payload.reference};
+                },
+            },
+            [
+                async (input, next) => {
+                    seenByMiddleware.push(String(input.type));
+                    await Promise.resolve();
+
+                    return next(input);
+                },
+            ],
+        );
+
+        const references = ['ref-1', 'ref-2', 'ref-3', 'ref-4', 'ref-5'];
+        const responses = await Promise.all(
+            references.map(reference =>
+                dispatcher.handle({type: 'register_payment', payload: {reference, amount: 100}}),
+            ),
+        );
+
+        expect(responses).toEqual(references.map(reference => ({reference})));
+        expect(seenByMiddleware).toHaveLength(references.length);
+    });
+
+    test('the handler declared last for a type is the one that is used', async () => {
+        const dispatcher = new ServiceDispatcher<PaymentService>({
+            ...handlers,
+            register_payment: async payload => {
+                handled.push(`override:${payload.reference}`);
+
+                return {reference: 'override'};
+            },
+        });
+
+        const response = await dispatcher.handle({
+            type: 'register_payment',
+            payload: {reference: 'ref-1', amount: 100},
+        });
+
+        expect(response).toEqual({reference: 'override'});
+        expect(handled).toEqual(['override:ref-1']);
     });
 });

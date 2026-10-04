@@ -166,6 +166,39 @@ describe('mocked service bus', () => {
         );
     });
 
+    test('an error takes precedence over a response staged on the same entry', async () => {
+        const service = new MockedService<MockedServiceDefinition>();
+        const error = new Error('uh oh');
+        service.stageResponse({
+            type: 'ping',
+            response: 'pong',
+            error,
+        });
+
+        await expect(service.handle({type: 'ping', payload: 'ping'})).rejects.toThrow(error);
+    });
+
+    test('the first staged response that matches the input is the one that is used', async () => {
+        const service = new MockedService<MockedServiceDefinition>();
+        service.stageResponse({type: 'ping', response: 'nope'});
+        service.stageResponse({type: 'ping', payload: 'ping', response: 'pong'});
+
+        expect(await service.handle({type: 'ping', payload: 'ping'})).toEqual('nope');
+        expect(await service.handle({type: 'ping', payload: 'ping'})).toEqual('pong');
+    });
+
+    test('a call without a staged response is still recorded', async () => {
+        const service = new MockedService<MockedServiceDefinition>();
+
+        await expect(service.handle({type: 'ping', payload: 'ping'})).rejects.toThrow(
+            errorForMissingMockedResponseForInput({type: 'ping', payload: 'ping'}),
+        );
+
+        expect(service.wasCalled()).toEqual(true);
+        expect(service.timesCalled()).toEqual(1);
+        expect(service.wasCalledWith({type: 'ping', payload: 'ping'})).toEqual(true);
+    });
+
     test.each([
         // everything different,
         {
@@ -199,4 +232,64 @@ describe('mocked service bus', () => {
             );
         },
     );
+});
+
+interface OrderService {
+    place_order: {
+        payload: {reference: string; lines: {sku: string; quantity: number}[]};
+        response: {id: string};
+    };
+    cancel_order: {
+        payload: {reference: string};
+        response: void;
+    };
+}
+
+describe('mocking a service with structured payloads', () => {
+    const order = {reference: 'ORD-1', lines: [{sku: 'sku-1', quantity: 2}]};
+    let service: MockedService<OrderService>;
+
+    beforeEach(() => {
+        service = new MockedService<OrderService>();
+    });
+
+    test('a staged response matches a structurally equal payload', async () => {
+        service.stageResponse({type: 'place_order', payload: order, response: {id: 'order-id'}});
+
+        const response = await service.handle({
+            type: 'place_order',
+            payload: {reference: 'ORD-1', lines: [{sku: 'sku-1', quantity: 2}]},
+        });
+
+        expect(response).toEqual({id: 'order-id'});
+    });
+
+    test('a staged response does not match when a nested value differs', async () => {
+        service.stageResponse({type: 'place_order', payload: order, response: {id: 'order-id'}});
+        const input: AnyInputForService<OrderService> = {
+            type: 'place_order',
+            payload: {reference: 'ORD-1', lines: [{sku: 'sku-1', quantity: 3}]},
+        };
+
+        await expect(service.handle(input)).rejects.toThrow(errorForMissingMockedResponseForInput(input));
+    });
+
+    test('a command without a response can be staged by type alone', async () => {
+        service.stageResponse({type: 'cancel_order'});
+
+        await expect(service.handle({type: 'cancel_order', payload: {reference: 'ORD-1'}})).resolves.toBeUndefined();
+        expect(service.wasCalledWith({type: 'cancel_order', payload: {reference: 'ORD-1'}})).toEqual(true);
+    });
+
+    test('calls are counted per structurally equal input', async () => {
+        service.stageResponse({type: 'place_order', response: {id: 'first'}});
+        service.stageResponse({type: 'place_order', response: {id: 'second'}});
+
+        await service.handle({type: 'place_order', payload: order});
+        await service.handle({type: 'place_order', payload: {...order}});
+
+        expect(service.timeCalledWith({type: 'place_order', payload: order})).toEqual(2);
+        expect(service.timeCalledWith({type: 'cancel_order', payload: {reference: 'ORD-1'}})).toEqual(0);
+        expect(service.timesCalled()).toEqual(2);
+    });
 });
