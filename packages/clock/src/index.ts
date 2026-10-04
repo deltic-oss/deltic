@@ -18,17 +18,40 @@ export interface TestClock extends Clock {
 export const GlobalClock = process.env.NODE_ENV === 'test' ? createTestClock() : SystemClock;
 export const GlobalTestClock = process.env.NODE_ENV === 'test' ? (GlobalClock as TestClock) : createTestClock();
 
+/**
+ * Interpret a point in time, refusing anything that would leave a clock unusable.
+ *
+ * `Date.parse` reports a string it cannot interpret as `NaN`, which is a valid `number` and so
+ * would be stored without complaint. A clock holding `NaN` reports an `Invalid Date`, which only
+ * fails much later, in whichever consumer first formats it.
+ */
+function interpretTime(value: number | string): number {
+    const time = typeof value === 'number' ? value : Date.parse(value);
+
+    if (!Number.isFinite(time)) {
+        throw new Error(`Unable to interpret ${JSON.stringify(value)} as a point in time`);
+    }
+
+    return time;
+}
+
 export function createTestClock(start: number | string = Date.now()): TestClock {
-    let now = typeof start === 'number' ? start : Date.parse(start);
+    let now = interpretTime(start);
     const originalNow = now;
 
     return {
         now: () => now,
-        advance: (increment: number) => (now += increment),
+        advance: (increment: number) => {
+            if (!Number.isFinite(increment)) {
+                throw new Error(`Unable to advance a clock by ${JSON.stringify(increment)}`);
+            }
+
+            return (now += increment);
+        },
         date: () => new Date(now),
         tick: () => ++now,
         travelTo: (newTime: number | string) => {
-            now = typeof newTime === 'number' ? newTime : Date.parse(newTime);
+            now = interpretTime(newTime);
         },
         reset: () => {
             now = originalNow;
