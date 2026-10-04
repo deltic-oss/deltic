@@ -1,20 +1,44 @@
 import {
     composeContextSlots,
+    composeContextSlotsForTesting,
     Context,
     type ContextStore,
     ContextMismatchDetected,
     defineContextSlot,
     ContextStoreUsingMemory,
+    type ValueReadWriter,
     ValueReadWriterUsingContext,
+    ValueReadWriterUsingMemory,
+    UnableToAttachContext,
     UnableToResolveValue,
 } from './index.js';
-import {AsyncLocalStorage} from 'node:async_hooks';
+import {AsyncLocalStorage, AsyncResource} from 'node:async_hooks';
+import {EventEmitter} from 'node:events';
+import {Readable} from 'node:stream';
 
 interface MyContext {
     name: string;
     age: number;
     tenant_id: string;
     value: string;
+}
+
+/**
+ * A one-shot synchronisation point, used to interleave concurrent flows
+ * deterministically instead of relying on timing.
+ */
+type Checkpoint = {
+    readonly reached: Promise<void>;
+    reach(): void;
+};
+
+function createCheckpoint(): Checkpoint {
+    let reach: () => void = () => {};
+    const reached = new Promise<void>(resolve => {
+        reach = resolve;
+    });
+
+    return {reached, reach: () => reach()};
 }
 
 describe.each([
@@ -29,9 +53,7 @@ describe.each([
 
     beforeEach(() => {
         contextStore = factory();
-        context = new Context(contextStore, undefined, {
-            value: 'default',
-        });
+        context = new Context(contextStore);
         tenantContext = new ValueReadWriterUsingContext<'tenant_id', string>(context, 'tenant_id');
     });
 
@@ -185,6 +207,146 @@ describe.each([
                     tenantOne,
                 ),
             );
+        });
+    });
+
+    test('reading context outside of a run scope yields no values', () => {
+        expect(context.context()).toEqual({});
+        expect(context.get('name')).toBeUndefined();
+        expect(tenantContext.resolve()).toBeUndefined();
+        expect(() => tenantContext.mustResolve()).toThrow(UnableToResolveValue);
+    });
+
+    test('the value produced by the callback is returned', async () => {
+        await expect(context.run(async () => 'handled', {name: 'Frank'})).resolves.toEqual('handled');
+    });
+
+    test('an error thrown inside a run reaches the caller', async () => {
+        const failure = new Error('consumer failed');
+
+        await expect(context.run(async () => {
+            throw failure;
+        }, {name: 'Frank'})).rejects.toBe(failure);
+    });
+
+    test('the surrounding context is restored after a nested run throws', async () => {
+        let restored: Partial<MyContext> = {};
+
+        await context.run(async () => {
+            await expect(context.run(async () => {
+                throw new Error('nested failure');
+            }, {name: 'Jane'})).rejects.toThrow('nested failure');
+
+            restored = context.context();
+        }, {name: 'Frank', age: 37});
+
+        expect(restored).toEqual({name: 'Frank', age: 37});
+        expect(context.context()).toEqual({});
+    });
+
+    test('values attached in a nested run stay in that run', async () => {
+        let surrounding: Partial<MyContext> = {};
+
+        await context.run(async () => {
+            await context.run(async () => {
+                context.attach({name: 'Jane'});
+            }, {age: 21});
+
+            surrounding = context.context();
+        }, {name: 'Frank', age: 37});
+
+        expect(surrounding).toEqual({name: 'Frank', age: 37});
+    });
+
+    test('units of work processed one after the other do not inherit each other values', async () => {
+        // mirrors RunMessageConsumerInContext handling two messages in sequence
+        const observed: Array<Partial<MyContext>> = [];
+
+        for (const tenantId of [tenantOne, tenantTwo]) {
+            await context.run(async () => {
+                context.attach({name: `handler-${tenantId}`});
+                observed.push({...context.context()});
+            }, {tenant_id: tenantId});
+        }
+
+        expect(observed).toEqual([
+            {tenant_id: tenantOne, name: `handler-${tenantOne}`},
+            {tenant_id: tenantTwo, name: `handler-${tenantTwo}`},
+        ]);
+    });
+
+    test('the store holds on to the context object instead of a copy', async () => {
+        const provided: Partial<MyContext> = {name: 'Frank'};
+
+        await contextStore.run(provided, async () => {
+            provided.age = 37;
+
+            expect(contextStore.getStore()).toBe(provided);
+            expect(contextStore.getStore()).toEqual({name: 'Frank', age: 37});
+        });
+    });
+
+    describe('constructor defaults', () => {
+        let defaulting: Context<MyContext>;
+
+        beforeEach(() => {
+            defaulting = new Context(factory(), undefined, {value: 'default'});
+        });
+
+        test('applies the constructor defaults when a run provides no values', async () => {
+            await defaulting.run(async () => {
+                expect(defaulting.get('value')).toEqual('default');
+                expect(defaulting.context()).toEqual({value: 'default'});
+            });
+        });
+
+        test('values provided to a run take precedence over the constructor defaults', async () => {
+            await defaulting.run(async () => {
+                expect(defaulting.get('value')).toEqual('provided');
+            }, {value: 'provided'});
+        });
+
+        test('a nested run keeps the value its parent decided on instead of the default', async () => {
+            await defaulting.run(async () => {
+                await defaulting.run(async () => {
+                    expect(defaulting.get('value')).toEqual('provided');
+                });
+            }, {value: 'provided'});
+        });
+
+        test('the defaults are not visible outside a run scope', () => {
+            expect(defaulting.context()).toEqual({});
+            expect(defaulting.get('value')).toBeUndefined();
+        });
+    });
+
+    test('reports that there is no scope to attach values to', () => {
+        expect(() => context.attach({tenant_id: tenantOne})).toThrow(UnableToAttachContext);
+    });
+
+    test('a value reader reports that there is no scope to write to', () => {
+        expect(() => tenantContext.use(tenantOne)).toThrow(UnableToAttachContext);
+        expect(() => tenantContext.forget()).toThrow(UnableToAttachContext);
+    });
+
+    test('the scope is gone again once a run has finished', async () => {
+        await context.run(async () => {
+            context.attach({tenant_id: tenantOne});
+        });
+
+        expect(() => context.attach({tenant_id: tenantTwo})).toThrow(UnableToAttachContext);
+    });
+
+    // see .claude-work/issues/context-attach-prototype-pollution.md
+    it.fails('attaches keys as own properties without replacing the prototype', async () => {
+        await context.run(async () => {
+            // claims decoded from an untrusted token, `__proto__` survives JSON.parse as an own key
+            const claims = JSON.parse('{"name":"attacker","__proto__":{"tenant_id":"other-tenant"}}') as Partial<MyContext>;
+
+            context.attach(claims);
+
+            expect(context.get('tenant_id')).toBeUndefined();
+            expect(Object.getPrototypeOf(context.context())).toBe(Object.prototype);
         });
     });
 });
@@ -448,5 +610,548 @@ describe.each([
     test('defineContextSlot respects inherited option', () => {
         const slot = defineContextSlot<'key', string>({key: 'key', inherited: false});
         expect(slot.inherited).toEqual(false);
+    });
+
+    test('a slot without a default and without a value is absent from the context', async () => {
+        // ContextMessageDecorator uses `key in context` to decide which headers to write
+        const ctx = composeContextSlots(
+            [tenantSlot, userSlot],
+            storeFactory(),
+        );
+
+        await ctx.run(async () => {
+            const snapshot = ctx.context();
+
+            expect('tenant_id' in snapshot).toEqual(false);
+            expect('user_id' in snapshot).toEqual(true);
+        });
+    });
+
+    test('an explicitly undefined value suppresses the slot default', async () => {
+        const ctx = composeContextSlots(
+            [tenantSlot, userSlot],
+            storeFactory(),
+        );
+
+        await ctx.run(async () => {
+            expect(ctx.get('user_id')).toBeUndefined();
+            expect('user_id' in ctx.context()).toEqual(true);
+        }, {user_id: undefined});
+    });
+
+    test('an explicitly undefined value replaces an inherited value', async () => {
+        const ctx = composeContextSlots(
+            [tenantSlot, userSlot],
+            storeFactory(),
+        );
+
+        await ctx.run(async () => {
+            await ctx.run(async () => {
+                expect(ctx.get('tenant_id')).toBeUndefined();
+            }, {tenant_id: undefined});
+
+            expect(ctx.get('tenant_id')).toEqual('acme');
+        }, {tenant_id: 'acme'});
+    });
+
+    test('a forgotten value is not restored from the default in a nested run', async () => {
+        // TenantScopingMessageConsumer restores the previous value, which may be undefined
+        const ctx = composeContextSlots(
+            [tenantSlot, userSlot],
+            storeFactory(),
+        );
+        const userContext = new ValueReadWriterUsingContext(ctx, 'user_id');
+
+        await ctx.run(async () => {
+            userContext.forget();
+
+            await ctx.run(async () => {
+                expect(ctx.get('user_id')).toBeUndefined();
+            });
+        });
+    });
+});
+
+describe('composeContextSlotsForTesting', () => {
+    const tenantSlot = defineContextSlot<'tenant_id', string>({key: 'tenant_id'});
+    const userSlot = defineContextSlot({key: 'user_id', defaultValue: () => 'anonymous'});
+
+    test('slot defaults are available without entering a run scope', () => {
+        const ctx = composeContextSlotsForTesting([tenantSlot, userSlot]);
+
+        expect(ctx.get('user_id')).toEqual('anonymous');
+        expect(ctx.get('tenant_id')).toBeUndefined();
+    });
+
+    test('values can be attached without entering a run scope', () => {
+        const ctx = composeContextSlotsForTesting([tenantSlot, userSlot]);
+
+        ctx.attach({tenant_id: 'acme'});
+
+        expect(ctx.get('tenant_id')).toEqual('acme');
+    });
+
+    test('a run inherits the values prepared outside of a scope', async () => {
+        const ctx = composeContextSlotsForTesting([tenantSlot, userSlot]);
+        ctx.attach({tenant_id: 'acme'});
+
+        await ctx.run(async () => {
+            expect(ctx.get('tenant_id')).toEqual('acme');
+            expect(ctx.get('user_id')).toEqual('anonymous');
+        });
+    });
+
+    test('a run does not write back into the prepared context', async () => {
+        const ctx = composeContextSlotsForTesting([tenantSlot]);
+
+        await ctx.run(async () => {
+            ctx.attach({tenant_id: 'other-tenant'});
+        }, {tenant_id: 'acme'});
+
+        expect(ctx.get('tenant_id')).toBeUndefined();
+    });
+
+    test('slot defaults are created once for the whole composition', async () => {
+        let created = 0;
+        const traceSlot = defineContextSlot({key: 'trace_id', defaultValue: () => `trace-${++created}`});
+        const ctx = composeContextSlotsForTesting([traceSlot]);
+
+        await ctx.run(async () => {
+            expect(ctx.get('trace_id')).toEqual('trace-1');
+        });
+
+        await ctx.run(async () => {
+            expect(ctx.get('trace_id')).toEqual('trace-1');
+        });
+
+        expect(created).toEqual(1);
+    });
+});
+
+// ============================================================================
+// Async context propagation
+// ============================================================================
+
+interface RequestContext {
+    tenant_id: string;
+    user_id: string;
+}
+
+describe('async context propagation using AsyncLocalStorage', () => {
+    let context: Context<RequestContext>;
+
+    beforeEach(() => {
+        context = new Context<RequestContext>(new AsyncLocalStorage<Partial<RequestContext>>());
+    });
+
+    test('the context survives await boundaries', async () => {
+        const observed = await context.run(async () => {
+            await Promise.resolve();
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+            return context.get('tenant_id');
+        }, {tenant_id: 'acme'});
+
+        expect(observed).toEqual('acme');
+    });
+
+    test.each([
+        ['setTimeout', (fn: () => void): void => {
+            setTimeout(fn, 0);
+        }],
+        ['setImmediate', (fn: () => void): void => {
+            setImmediate(fn);
+        }],
+        ['queueMicrotask', (fn: () => void): void => {
+            queueMicrotask(fn);
+        }],
+        ['process.nextTick', (fn: () => void): void => {
+            process.nextTick(fn);
+        }],
+    ] as const)('the context is available in a callback scheduled with %s', async (_name, schedule) => {
+        const observed = await context.run(
+            () => new Promise<string | undefined>(resolve => {
+                schedule(() => resolve(context.get('tenant_id')));
+            }),
+            {tenant_id: 'acme'},
+        );
+
+        expect(observed).toEqual('acme');
+    });
+
+    test('every branch of Promise.all observes the same context', async () => {
+        const observed = await context.run(() => Promise.all([
+            (async () => {
+                await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+                return context.get('tenant_id');
+            })(),
+            (async () => {
+                await Promise.resolve();
+
+                return context.get('tenant_id');
+            })(),
+        ]), {tenant_id: 'acme'});
+
+        expect(observed).toEqual(['acme', 'acme']);
+    });
+
+    test('the context is available in a then continuation', async () => {
+        const observed = await context.run(
+            () => Promise.resolve().then(() => context.get('tenant_id')),
+            {tenant_id: 'acme'},
+        );
+
+        expect(observed).toEqual('acme');
+    });
+
+    test('the context is available in stream event handlers', async () => {
+        const observed: Array<string | undefined> = [];
+
+        await context.run(async () => {
+            const stream = Readable.from(['first', 'second']);
+
+            await new Promise<void>((resolve, reject) => {
+                stream.on('data', () => observed.push(context.get('tenant_id')));
+                stream.on('error', reject);
+                stream.on('end', () => {
+                    observed.push(context.get('tenant_id'));
+                    resolve();
+                });
+            });
+        }, {tenant_id: 'acme'});
+
+        expect(observed).toEqual(['acme', 'acme', 'acme']);
+    });
+
+    test('the context is restored after an inner scope throws', async () => {
+        let restored: string | undefined;
+
+        await context.run(async () => {
+            await expect(context.run(async () => {
+                await Promise.resolve();
+                throw new Error('inner failure');
+            }, {tenant_id: 'other-tenant'})).rejects.toThrow('inner failure');
+
+            restored = context.get('tenant_id');
+        }, {tenant_id: 'acme'});
+
+        expect(restored).toEqual('acme');
+    });
+
+    test('concurrent flows do not observe each other values', async () => {
+        const secondEntered = createCheckpoint();
+        const firstObserved = createCheckpoint();
+        const observed: Record<string, string | undefined> = {};
+
+        const first = context.run(async () => {
+            await secondEntered.reached;
+            observed.first = context.get('tenant_id');
+            firstObserved.reach();
+        }, {tenant_id: 'tenant-a'});
+
+        const second = context.run(async () => {
+            secondEntered.reach();
+            await firstObserved.reached;
+            observed.second = context.get('tenant_id');
+        }, {tenant_id: 'tenant-b'});
+
+        await Promise.all([first, second]);
+
+        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
+    });
+
+    test('values attached by concurrent flows stay within their own flow', async () => {
+        const firstEntered = createCheckpoint();
+        const secondAttached = createCheckpoint();
+        const observed: Record<string, Partial<RequestContext>> = {};
+
+        const first = context.run(async () => {
+            firstEntered.reach();
+            await secondAttached.reached;
+            context.attach({user_id: 'user-a'});
+            observed.first = {...context.context()};
+        }, {tenant_id: 'tenant-a'});
+
+        const second = context.run(async () => {
+            await firstEntered.reached;
+            context.attach({user_id: 'user-b'});
+            secondAttached.reach();
+            observed.second = {...context.context()};
+        }, {tenant_id: 'tenant-b'});
+
+        await Promise.all([first, second]);
+
+        expect(observed).toEqual({
+            first: {tenant_id: 'tenant-a', user_id: 'user-a'},
+            second: {tenant_id: 'tenant-b', user_id: 'user-b'},
+        });
+    });
+
+    test('an event listener observes the context of the flow that emits', async () => {
+        // the reason MultiOutboxRelayRunner wraps its listeners in AsyncResource.bind
+        const emitter = new EventEmitter();
+        const observed: Array<string | undefined> = [];
+
+        await context.run(async () => {
+            emitter.on('work', () => observed.push(context.get('tenant_id')));
+        }, {tenant_id: 'registering-flow'});
+
+        await context.run(async () => {
+            emitter.emit('work');
+        }, {tenant_id: 'emitting-flow'});
+
+        emitter.emit('work');
+
+        expect(observed).toEqual(['emitting-flow', undefined]);
+    });
+
+    test('a listener bound as an async resource keeps the context of the flow that registered it', async () => {
+        const emitter = new EventEmitter();
+        const observed: Array<string | undefined> = [];
+
+        await context.run(async () => {
+            emitter.on('work', AsyncResource.bind(() => observed.push(context.get('tenant_id'))));
+        }, {tenant_id: 'registering-flow'});
+
+        await context.run(async () => {
+            emitter.emit('work');
+        }, {tenant_id: 'emitting-flow'});
+
+        emitter.emit('work');
+
+        expect(observed).toEqual(['registering-flow', 'registering-flow']);
+    });
+});
+
+describe('ContextStoreUsingMemory with overlapping flows', () => {
+    let store: ContextStoreUsingMemory<RequestContext>;
+    let context: Context<RequestContext>;
+
+    beforeEach(() => {
+        store = new ContextStoreUsingMemory<RequestContext>();
+        context = new Context<RequestContext>(store);
+    });
+
+    async function interleaveTwoFlows(observed: Record<string, string | undefined>): Promise<void> {
+        const secondEntered = createCheckpoint();
+        const firstObserved = createCheckpoint();
+
+        const first = context.run(async () => {
+            await secondEntered.reached;
+            observed.first = context.get('tenant_id');
+            firstObserved.reach();
+        }, {tenant_id: 'tenant-a'});
+
+        const second = context.run(async () => {
+            secondEntered.reach();
+            await firstObserved.reached;
+            observed.second = context.get('tenant_id');
+        }, {tenant_id: 'tenant-b'});
+
+        await Promise.all([first, second]);
+    }
+
+    // see .claude-work/issues/context-memory-store-leaks-between-concurrent-flows.md
+    it.fails('keeps overlapping flows from observing each other values', async () => {
+        const observed: Record<string, string | undefined> = {};
+
+        await interleaveTwoFlows(observed);
+
+        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
+    });
+
+    // see .claude-work/issues/context-memory-store-leaks-between-concurrent-flows.md
+    it.fails('leaves no context behind once every flow has settled', async () => {
+        await interleaveTwoFlows({});
+
+        expect(store.getStore()).toBeUndefined();
+    });
+
+    test('sequential flows are scoped correctly', async () => {
+        const observed: Array<string | undefined> = [];
+
+        for (const tenantId of ['tenant-a', 'tenant-b']) {
+            await context.run(async () => {
+                await new Promise<void>(resolve => setImmediate(resolve));
+                observed.push(context.get('tenant_id'));
+            }, {tenant_id: tenantId});
+        }
+
+        expect(observed).toEqual(['tenant-a', 'tenant-b']);
+        expect(store.getStore()).toBeUndefined();
+    });
+});
+
+// ============================================================================
+// ValueReadWriter contract
+// ============================================================================
+
+type TenantValue = string | number;
+
+type ValueScope = {
+    readonly values: ValueReadWriter<TenantValue>;
+    run<R>(fn: () => Promise<R>): Promise<R>;
+};
+
+function contextBackedScope(store: ContextStore<{tenant_id: TenantValue}>): ValueScope {
+    const context = new Context<{tenant_id: TenantValue}>(store);
+
+    return {
+        values: new ValueReadWriterUsingContext(context, 'tenant_id'),
+        run<R>(fn: () => Promise<R>): Promise<R> {
+            return context.run(fn);
+        },
+    };
+}
+
+describe.each([
+    ['memory', (): ValueScope => ({
+        values: new ValueReadWriterUsingMemory<TenantValue>(),
+        run<R>(fn: () => Promise<R>): Promise<R> {
+            return fn();
+        },
+    })],
+    ['context with async_hooks', (): ValueScope => contextBackedScope(
+        new AsyncLocalStorage<Partial<{tenant_id: TenantValue}>>(),
+    )],
+    ['context with memory store', (): ValueScope => contextBackedScope(
+        new ContextStoreUsingMemory<{tenant_id: TenantValue}>({}),
+    )],
+] as const)('ValueReadWriter contract - %s', (_name, factory) => {
+    let scope: ValueScope;
+
+    beforeEach(() => {
+        scope = factory();
+    });
+
+    test('a value that was never used cannot be resolved', async () => {
+        await scope.run(async () => {
+            expect(scope.values.resolve()).toBeUndefined();
+            expect(() => scope.values.mustResolve()).toThrow(UnableToResolveValue);
+        });
+    });
+
+    test('a value in use can be resolved', async () => {
+        await scope.run(async () => {
+            scope.values.use('acme');
+
+            expect(scope.values.resolve()).toEqual('acme');
+            expect(scope.values.mustResolve()).toEqual('acme');
+        });
+    });
+
+    test('the number zero counts as a value in use', async () => {
+        await scope.run(async () => {
+            scope.values.use(0);
+
+            expect(scope.values.resolve()).toEqual(0);
+            expect(scope.values.mustResolve()).toEqual(0);
+        });
+    });
+
+    test('an empty string counts as a value in use', async () => {
+        // consumers guard with `if (tenantId)`, so it matters that this resolves
+        await scope.run(async () => {
+            scope.values.use('');
+
+            expect(scope.values.resolve()).toEqual('');
+            expect(scope.values.mustResolve()).toEqual('');
+        });
+    });
+
+    test('a forgotten value can no longer be resolved', async () => {
+        await scope.run(async () => {
+            scope.values.use('acme');
+            scope.values.forget();
+
+            expect(scope.values.resolve()).toBeUndefined();
+            expect(() => scope.values.mustResolve()).toThrow(UnableToResolveValue);
+        });
+    });
+
+    test('the value in use survives an await boundary', async () => {
+        await scope.run(async () => {
+            scope.values.use('acme');
+            await new Promise<void>(resolve => setImmediate(resolve));
+
+            expect(scope.values.mustResolve()).toEqual('acme');
+        });
+    });
+
+    test('a matching value passes the mismatch check', async () => {
+        await scope.run(async () => {
+            scope.values.use('acme');
+
+            expect(() => scope.values.preventMismatch('acme')).not.toThrow();
+        });
+    });
+
+    test('a different value is reported as a mismatch', async () => {
+        await scope.run(async () => {
+            scope.values.use('acme');
+
+            expect(() => scope.values.preventMismatch('other-tenant')).toThrow(
+                ContextMismatchDetected.for('acme', 'other-tenant'),
+            );
+        });
+    });
+
+    test('a missing value is reported as unresolvable by the mismatch check', async () => {
+        await scope.run(async () => {
+            expect(() => scope.values.preventMismatch('acme')).toThrow(UnableToResolveValue);
+        });
+    });
+});
+
+describe('tenant scoping across concurrent flows', () => {
+    test('a context backed value stays within the flow that used it', async () => {
+        // mirrors TenantScopingMessageConsumer wrapping two concurrent message deliveries
+        const context = new Context<{tenant_id: string}>(new AsyncLocalStorage<Partial<{tenant_id: string}>>());
+        const tenantContext = new ValueReadWriterUsingContext(context, 'tenant_id');
+        const firstUsed = createCheckpoint();
+        const secondUsed = createCheckpoint();
+        const observed: Record<string, string> = {};
+
+        const first = context.run(async () => {
+            tenantContext.use('tenant-a');
+            firstUsed.reach();
+            await secondUsed.reached;
+            observed.first = tenantContext.mustResolve();
+        });
+
+        const second = context.run(async () => {
+            await firstUsed.reached;
+            tenantContext.use('tenant-b');
+            secondUsed.reach();
+            observed.second = tenantContext.mustResolve();
+        });
+
+        await Promise.all([first, second]);
+
+        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
+    });
+
+    test('a memory backed value is shared by every flow', async () => {
+        // ValueReadWriterUsingMemory holds a single value; it is not scoped to a flow
+        const tenantContext = new ValueReadWriterUsingMemory<string>();
+        const firstUsed = createCheckpoint();
+
+        const first = (async () => {
+            tenantContext.use('tenant-a');
+            firstUsed.reach();
+            await new Promise<void>(resolve => setImmediate(resolve));
+
+            return tenantContext.mustResolve();
+        })();
+
+        const second = (async () => {
+            await firstUsed.reached;
+            tenantContext.use('tenant-b');
+
+            return tenantContext.mustResolve();
+        })();
+
+        await expect(Promise.all([first, second])).resolves.toEqual(['tenant-b', 'tenant-b']);
     });
 });
