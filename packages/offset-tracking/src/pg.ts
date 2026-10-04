@@ -8,9 +8,13 @@ type OffsetRecord<Offset extends string | number, Id extends OffsetIdType> = {
 };
 
 export interface OffsetRepositoryUsingPgOptions {
+    /**
+     * Optionally schema-qualified. Refused unless it is a plain identifier: the name is part of the
+     * statement text, so anything else would run as SQL.
+     */
     tableName: string;
     consumerName: string;
-    selectForUpdate?: true;
+    selectForUpdate?: boolean;
 }
 
 export class OffsetRepositoryUsingPg<
@@ -33,10 +37,14 @@ export class OffsetRepositoryUsingPg<
     async retrieve(identifier: Id): Promise<Offset | undefined> {
         const conn = await this.pool.primary();
 
+        // FOR UPDATE holds the row against concurrent read-modify-write cycles until the caller's
+        // transaction finishes. It goes at the end of the statement; it used to be spliced into the
+        // SELECT keyword itself, which made every locking retrieve a syntax error.
         const result = await conn.query<OffsetRecord<Offset, Id>>(
-            `${this.selectForUpdate ? 'SELECT FOR UPDATE' : 'SELECT'} "offset"
+            `SELECT "offset"
                 FROM ${this.tableName}
-                WHERE consumer = $1 AND identifier = $2`,
+                WHERE consumer = $1 AND identifier = $2
+                ${this.selectForUpdate ? 'FOR UPDATE' : ''}`,
             [this.consumerName, identifier],
         );
 
