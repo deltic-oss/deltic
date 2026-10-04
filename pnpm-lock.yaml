@@ -315,6 +315,8 @@ importers:
         specifier: workspace:^
         version: link:../wait-group
 
+  packages/proxy-decorator: {}
+
   packages/service-dispatcher:
     devDependencies:
       '@deltic/event-sourcing':

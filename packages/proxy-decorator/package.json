@@ -1,0 +1,30 @@
+{
+  "name": "@deltic/proxy-decorator",
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Decorate selected methods of an instance without writing a decorator class",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "module-sync": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    }
+  },
+  "scripts": {},
+  "keywords": [
+    "proxy",
+    "decorator",
+    "decorate",
+    "methods"
+  ],
+  "author": "Frank de Jonge (https://frankdejonge.nl)",
+  "license": "ISC",
+  "packageManager": "pnpm@10.12.4",
+  "dependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deltic-oss/deltic.git",
+    "directory": "packages/proxy-decorator"
+  }
+}
