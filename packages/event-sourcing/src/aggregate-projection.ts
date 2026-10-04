@@ -49,6 +49,8 @@ export class MultiAggregateProjector<Stream extends AggregateStream<Stream>> imp
     constructor(private projectors: AggregateProjector<Stream>[]) {}
 
     async upsert(aggregate: AggregateRoot<Stream>): Promise<void> {
-        await Promise.all(this.projectors.map(projector => projector.upsert(aggregate)));
+        for (const projector of this.projectors) {
+            await projector.upsert(aggregate);
+        }
     }
 }
