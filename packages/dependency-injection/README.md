@@ -87,6 +87,19 @@ The graph is then walked from consumers to dependencies. Everything that nothing
 cleaned up first, concurrently; each following step waits for its consumers to finish. A dependency
 therefore stays usable for as long as anything that may need it is still shutting down.
 
+Calling `cleanup()` while a cleanup is already running joins the running one: every hook runs once,
+and every caller settles when that shutdown has finished. Shutdown is usually triggered from more
+than one place, so the triggers can share one handler without guarding it themselves:
+
+```typescript
+const shutdown = () => container.cleanup().then(() => process.exit(0));
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+```
+
+Once a cleanup has finished, a later call starts a new one for whatever was resolved since.
+
 A cycle that cannot be resolved this way throws, and nothing is cleaned up:
 
 ```

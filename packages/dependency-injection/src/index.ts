@@ -72,6 +72,11 @@ export class DependencyContainer {
     // Created instances have no key of their own, this makes their bookkeeping addressable
     private createdInstanceCount = 0;
 
+    // The cleanup that is running, if any. Shutdown is commonly triggered from more than one place
+    // at once (SIGTERM and SIGINT, a supervisor's deadline), and every trigger must wait for the
+    // same shutdown rather than run each hook a second time.
+    private cleanupInProgress: Promise<void> | undefined = undefined;
+
     register<Service, const Key extends string | ServiceKey<Service> = string>(
         key: Key,
         definition: ServiceDefinition<Service>,
@@ -93,7 +98,19 @@ export class DependencyContainer {
         return key as unknown as ServiceKey<Service>;
     }
 
-    async cleanup(): Promise<void> {
+    /**
+     * Shuts down every service that takes part in the cleanup graph. A call made while a cleanup
+     * is running joins that cleanup instead of starting another one, so every hook runs once.
+     */
+    cleanup(): Promise<void> {
+        this.cleanupInProgress ??= this.runCleanup().finally(() => {
+            this.cleanupInProgress = undefined;
+        });
+
+        return this.cleanupInProgress;
+    }
+
+    private async runCleanup(): Promise<void> {
         const levels = this.computeShutdownLevels();
 
         for (const level of levels) {
