@@ -13,6 +13,11 @@ export class ExponentialBackoffStrategy implements BackOffStrategy {
             throw MaxAttemptsExceeded.atAttempt(attempt);
         }
 
+        // Once the exponent overflows to Infinity, a zero initial delay would yield 0 * Infinity = NaN.
+        if (this.initialDelayMs === 0) {
+            return 0;
+        }
+
         return Math.min(this.maxDelay, this.initialDelayMs * this.base ** (attempt - 1));
     }
 }
