@@ -71,6 +71,20 @@ The `TestClock` methods are:
 - `tick(): void` – to advance one ms
 - `advance(increment: number): void` – to advance with N amount of ms,
 - `travelTo(laterTime: number | string): void` – to set the clock to a particular point in time
+- `reset(): void` – to return the clock to the time it was created with
+
+A test clock always reports a usable point in time. `createTestClock` and `travelTo` interpret a
+string with `Date.parse`, and throw when the value cannot be interpreted, rather than storing the
+`NaN` that `Date.parse` reports for an unparseable string:
+
+```typescript
+createTestClock('2022-12-04T15:30:45.000Z'); // fine
+createTestClock('1670167845'); // throws: a unix timestamp in seconds is not a date string
+```
+
+The same applies to a number that is not finite, and to `advance`. Without this the clock would
+accept the value and only fail later, wherever a consumer first formats the resulting
+`Invalid Date`.
 
 See it in action:
 
