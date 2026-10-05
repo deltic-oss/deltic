@@ -355,8 +355,7 @@ describe('KeyValueStoreUsingPg', () => {
             }
         });
 
-        // see .claude-work/issues/key-value-connections-not-returned-to-the-pool.md
-        it.fails('clear returns the connection it claimed to the pool', async () => {
+        test('clear returns the connection it claimed to the pool', async () => {
             const releaseSpy = vi.spyOn(ownAsyncPool, 'release');
 
             try {
@@ -398,9 +397,7 @@ describe('KeyValueStoreUsingPg within a transaction', () => {
         await ownPool.end();
     });
 
-    // persist() hands the isolated transaction's connection back to the pool, after which the pool
-    // no longer recognises the transaction and refuses to finalise it
-    it.fails('a value can be persisted inside an isolated transaction', async () => {
+    test('a value can be persisted inside an isolated transaction', async () => {
         await expect(
             ownAsyncPool.runInIsolatedTransaction(() => pgStore.persist('isolated', 'value')),
         ).resolves.toBeUndefined();
