@@ -85,15 +85,8 @@ export class DependencyContainer {
             throw new Error(`Dependency ${key} is already registered`);
         }
 
-        if (definition.lazy) {
-            const proxy = this.createProxyFor(
-                key as unknown as ServiceKey<Service & object>,
-                definition as ServiceDefinition<Service & object>,
-            );
-            definition.factory = () => proxy;
-        }
-
-        this.definitions.set(key, definition);
+        // A copy, so one definition can be registered in any number of containers
+        this.definitions.set(key, {...definition});
 
         return key as unknown as ServiceKey<Service>;
     }
@@ -376,12 +369,18 @@ export class DependencyContainer {
             throw new Error(`No definition found for key "${key}".`);
         }
 
-        const {factory, cleanup, cache = true, lazy = false} = definition;
+        // Every resolution of a lazy service gets a proxy of its own. A cached service is
+        // constructed once, by whichever of its proxies is used first; a transient one by each.
+        if (definition.lazy) {
+            return this.resolveLazy<Service>(key);
+        }
+
+        const {factory, cleanup, cache = true} = definition;
         let resolved: ResolvedService | undefined = undefined;
 
         // Register cleanup callback BEFORE executing factory so that child
         // dependencies can record this service as their parent
-        if (cleanup || lazy) {
+        if (cleanup) {
             resolved = this.trackService(key, cleanup);
 
             this.recordDependencies([key]);
@@ -395,7 +394,7 @@ export class DependencyContainer {
         const instance = factory(this);
         this.resolutionStack.delete(key);
 
-        if (cache && !lazy) {
+        if (cache) {
             if (resolved) {
                 resolved.instance = instance;
             }

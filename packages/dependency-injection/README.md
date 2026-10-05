@@ -244,6 +244,26 @@ const collectionToken: ServiceKey<SomeCollection> = container.register('collecti
 });
 ```
 
+### Problem: A service must not be shared
+
+Services are constructed once and shared by everything that resolves them. Some objects carry
+state that belongs to one unit of work, a builder or a per-request scope, and must not be shared.
+
+#### Solution: Transient services
+
+Register them with `cache: false`, and every resolution constructs a new instance:
+
+```typescript
+const builderToken = container.register<ReportBuilder>('report.builder', {
+    cache: false,
+    factory: container => new ReportBuilder(container.resolve(poolToken)),
+});
+```
+
+A transient service cannot have a `cleanup`: the container does not keep the instances it hands
+out, so it has nothing to clean up. Combined with `lazy: true`, every resolution hands out a proxy
+of its own, which constructs its own instance on first use.
+
 ## Type Safety
 
 Service keys are strings, which means typos won't be caught at compile time. To mitigate this:

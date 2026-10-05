@@ -528,6 +528,18 @@ describe('@deltic/dependency-injection', () => {
         expect(isProxy(proxy)).toEqual(true);
     });
 
+    test('a lazy dependency resolved as a proxy constructs the service on first use', () => {
+        const token = container.register<Dependency>('something', {
+            factory: () => new Dependency('what'),
+            lazy: true,
+        });
+
+        const proxy = container.resolveLazy(token);
+
+        expect(proxy.name).toEqual('what');
+        expect(isProxy(container.resolve(token))).toEqual(false);
+    });
+
     test('shutting down registered instances', async () => {
         const instance = new Dependency('name');
         let hascleanup = false;
@@ -684,8 +696,7 @@ describe('@deltic/dependency-injection', () => {
             );
         });
 
-        // see .claude-work/issues/dependency-injection-lazy-definition-is-mutated-on-registration.md
-        it.fails('keeps two containers independent when a lazy definition is registered in both', async () => {
+        test('keeps two containers independent when a lazy definition is registered in both', async () => {
             const cleaned: string[] = [];
             let count = 0;
             const definition = {
@@ -897,8 +908,7 @@ describe('@deltic/dependency-injection', () => {
             expect(() => container.resolve(leftKey)).toThrow(/circular/i);
         });
 
-        // see .claude-work/issues/dependency-injection-lazy-transient-services-are-shared.md
-        it.fails('constructs a new instance for every resolution of a lazy transient service', () => {
+        test('constructs a new instance for every resolution of a lazy transient service', () => {
             let constructions = 0;
             const key = container.register<Dependency>('lazy-transient', {
                 lazy: true,
