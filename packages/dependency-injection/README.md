@@ -183,6 +183,11 @@ dependency resolution. This is a standard approach used by almost all DI contain
 Deltic Dependency Injection automatically detects circular references and resolves dependencies
 using proxies, which defer the instantiation, which breaks the looop. Problem solved!
 
+At shutdown, a service that resolves itself, or a cycle in which only one service has a cleanup, is
+cleaned up like anything else. A cycle between two services that both have a cleanup cannot be
+ordered, each would have to outlive the other, so `cleanup()` refuses it before running any hook.
+Give the cleanup to one side of the cycle only.
+
 ### Problem: Constructing heavy dependencies that are not always used
 
 Some dependencies are expensive to construct. When they're not always needed, you may want to prevent

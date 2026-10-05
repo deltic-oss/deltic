@@ -1194,8 +1194,7 @@ describe('@deltic/dependency-injection', () => {
 
         beforeEach(() => (segments = []));
 
-        // see .claude-work/issues/dependency-injection-self-reference-reported-as-circular-dependency.md
-        it.fails('shuts down a service that resolves itself lazily', async () => {
+        test('shuts down a service that resolves itself lazily', async () => {
              
             let dispatcherKey: ServiceKey<Dispatcher>;
             dispatcherKey = container.register<Dispatcher>('dispatcher', {
@@ -1212,8 +1211,7 @@ describe('@deltic/dependency-injection', () => {
             expect(segments).toEqual(['dispatcher']);
         });
 
-        // see .claude-work/issues/dependency-injection-self-reference-reported-as-circular-dependency.md
-        it.fails('shuts down a service in a cycle whose other members have nothing to shut down', async () => {
+        test('shuts down a service in a cycle whose other members have nothing to shut down', async () => {
             // eslint-disable-next-line prefer-const
             let collectionKey: ServiceKey<Collection>;
             const memberKey = container.register<Member>('member', {
