@@ -338,8 +338,7 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
         expect(rows).toEqual([]);
     });
 
-    // see .claude-work/issues/key-value-with-columns-unquoted-column-identifiers.md
-    it.fails('supports an identity column whose name needs quoting', async () => {
+    test('supports an identity column whose name needs quoting', async () => {
         const store = makeCamelCaseColumnStore();
         const user: User = {userId: 'user-1', nickname: 'Alice'};
         await store.persist({userId: 'user-1'}, user);
