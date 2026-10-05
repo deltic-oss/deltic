@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
 import {StandardError} from '@deltic/error-standard';
 
 export type ContextValue = null | object | undefined | string | number | boolean | ContextValue[] | ContextObject;
@@ -292,6 +293,9 @@ export type ContextDataFromSlots<Slots extends readonly ContextSlot<string, unkn
  * The slots define the shape of the context and optional default values. After composition,
  * the result is a standard Context that can be used like any other Context.
  *
+ * Without a store, the context is backed by an `AsyncLocalStorage` of its own, so flows that run
+ * concurrently are scoped separately.
+ *
  * @example
  * const tenantSlot = defineContextSlot<'tenant_id', string>({key: 'tenant_id'});
  * const userSlot = defineContextSlot({key: 'user_id', defaultValue: () => 'anonymous'});
@@ -310,7 +314,7 @@ export function composeContextSlots<
     const Slots extends readonly ContextSlot<string, unknown>[],
 >(
     slots: Slots,
-    store: ContextStore<ContextDataFromSlots<Slots>> = new ContextStoreUsingMemory<ContextDataFromSlots<Slots>>(),
+    store: ContextStore<ContextDataFromSlots<Slots>> = new AsyncLocalStorage<Partial<ContextDataFromSlots<Slots>>>(),
 ): Context<ContextDataFromSlots<Slots>> {
     return new Context(store, createContextValueCreator(slots));
 }

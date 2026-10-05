@@ -85,6 +85,7 @@ const txSlot = defineContextSlot({
     inherited: false, // not inherited from parent context
 });
 
+// backed by an AsyncLocalStorage of its own, unless a store is passed as the second argument
 const requestContext = composeContextSlots([tenantSlot, userSlot, txSlot]);
 
 await requestContext.run(async () => {
@@ -169,7 +170,7 @@ Creates a typed context slot with optional default value and inheritance control
 
 ### `composeContextSlots(slots, store?)`
 
-Composes multiple slots into a single `Context`. Slots with `defaultValue` are auto-initialized. Slots with `inherited: false` are not carried into nested `run()` calls.
+Composes multiple slots into a single `Context`. Slots with `defaultValue` are auto-initialized. Slots with `inherited: false` are not carried into nested `run()` calls. Without a `store`, the context is backed by an `AsyncLocalStorage` of its own, so concurrent flows are scoped separately.
 
 ### `ValueReadWriter<Value>` (interface)
 

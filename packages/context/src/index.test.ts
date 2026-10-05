@@ -718,6 +718,69 @@ describe('ContextStoreUsingMemory', () => {
 });
 
 // ============================================================================
+// composeContextSlots without a store
+// ============================================================================
+
+/**
+ * A one-shot synchronisation point, used to interleave concurrent flows
+ * deterministically instead of relying on timing.
+ */
+type Checkpoint = {
+    readonly reached: Promise<void>;
+    reach(): void;
+};
+
+function createCheckpoint(): Checkpoint {
+    let reach: () => void = () => {};
+    const reached = new Promise<void>(resolve => {
+        reach = resolve;
+    });
+
+    return {reached, reach: () => reach()};
+}
+
+describe('composeContextSlots without a store, with overlapping flows', () => {
+    let context: Context<Pick<RequestContext, 'tenant_id'>>;
+
+    beforeEach(() => {
+        context = composeContextSlots([defineContextSlot<'tenant_id', string>({key: 'tenant_id'})]);
+    });
+
+    async function interleaveTwoFlows(observed: Record<string, string | undefined>): Promise<void> {
+        const secondEntered = createCheckpoint();
+        const firstObserved = createCheckpoint();
+
+        const first = context.run(async () => {
+            await secondEntered.reached;
+            observed.first = context.get('tenant_id');
+            firstObserved.reach();
+        }, {tenant_id: 'tenant-a'});
+
+        const second = context.run(async () => {
+            secondEntered.reach();
+            await firstObserved.reached;
+            observed.second = context.get('tenant_id');
+        }, {tenant_id: 'tenant-b'});
+
+        await Promise.all([first, second]);
+    }
+
+    test('keeps overlapping flows from observing each other values', async () => {
+        const observed: Record<string, string | undefined> = {};
+
+        await interleaveTwoFlows(observed);
+
+        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
+    });
+
+    test('leaves no context behind once every flow has settled', async () => {
+        await interleaveTwoFlows({});
+
+        expect(context.context()).toEqual({});
+    });
+});
+
+// ============================================================================
 // ValueReadWriter contract
 // ============================================================================
 
