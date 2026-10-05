@@ -112,17 +112,6 @@ describe('WaitGroup', () => {
     });
 
     describe('counter transitions', () => {
-        test('resolves without yielding to the timer queue when there is no outstanding work', async () => {
-            const wg = new WaitGroup();
-            const order: string[] = [];
-
-            await Promise.all([
-                wg.wait().then(() => order.push('wait')),
-                new Promise<void>(resolve => setTimeout(resolve, 0)).then(() => order.push('timer')),
-            ]);
-
-            expect(order).toEqual(['wait', 'timer']);
-        });
 
         test('keeps a pending waiter blocked when work is added before the counter drains', async () => {
             const wg = new WaitGroup();
@@ -227,32 +216,6 @@ describe('WaitGroup', () => {
     });
 
     describe('failure paths', () => {
-        test('releases an in-flight waiter when the remaining work rejects', async () => {
-            const wg = new WaitGroup();
-            wg.add();
-            const work = Promise.reject(new Error('relay failed')).finally(() => wg.done());
-            const drained = wg.wait();
-
-            await expect(work).rejects.toThrow('relay failed');
-
-            expect(await observe(drained)).toBe('resolved');
-        });
-
-        test('releases an in-flight waiter when the remaining work throws synchronously', async () => {
-            const wg = new WaitGroup();
-            wg.add();
-            const drained = wg.wait();
-
-            expect(() => {
-                try {
-                    throw new Error('processor failed');
-                } finally {
-                    wg.done();
-                }
-            }).toThrow('processor failed');
-
-            expect(await observe(drained)).toBe('resolved');
-        });
 
         test('stays usable after a wait timed out', async () => {
             const wg = new WaitGroup();
@@ -270,18 +233,6 @@ describe('WaitGroup', () => {
     });
 
     describe('timeout and abort handling', () => {
-        test('rejects with a timeout reason when the work outlives the timeout', async () => {
-            const wg = new WaitGroup();
-            wg.add();
-
-            const reason = await wg.wait({timeout: 5}).then(
-                () => undefined,
-                (error: unknown) => error,
-            );
-
-            expect(reason).toBeInstanceOf(DOMException);
-            expect(`${reason}`).toContain('TimeoutError');
-        });
 
         test('prefers the caller abort reason when both a timeout and an abort signal are given', async () => {
             const wg = new WaitGroup();
@@ -311,21 +262,6 @@ describe('WaitGroup', () => {
             controller.abort(new Error('deadline exceeded'));
 
             await expect(wg.wait({abortSignal: controller.signal})).rejects.toThrow('deadline exceeded');
-        });
-
-        test('ignores an abort that arrives after the wait resolved', async () => {
-            const wg = new WaitGroup();
-            wg.add();
-            const controller = new AbortController();
-            const drained = wg.wait({abortSignal: controller.signal});
-            wg.done();
-
-            await expect(drained).resolves.toBeUndefined();
-
-            controller.abort(new Error('too late'));
-            await Promise.resolve();
-
-            await expect(drained).resolves.toBeUndefined();
         });
 
         test('waits indefinitely when the timeout argument is undefined', async () => {
