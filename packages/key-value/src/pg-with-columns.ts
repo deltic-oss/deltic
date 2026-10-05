@@ -32,6 +32,13 @@ export type StoredRecord<Value extends ObjectType> = {
     [index: string | number | symbol]: any;
 };
 
+/**
+ * Column names are used exactly as configured; unquoted, Postgres would fold them to lower case.
+ */
+function quoted(columnName: string): string {
+    return `"${columnName}"`;
+}
+
 export class KeyValueStoreWithColumnsUsingPg<
     Key extends KeyType<Key>,
     Value extends ObjectType,
@@ -86,10 +93,10 @@ export class KeyValueStoreWithColumnsUsingPg<
 
         await this.query(
             `
-            INSERT INTO ${this.tableName} (${[...identityColumns, ...valueColums].map(name => `"${name}"`).join(', ')})
+            INSERT INTO ${this.tableName} (${[...identityColumns, ...valueColums].map(quoted).join(', ')})
                 VALUES (${references.join(', ')})
-            ON CONFLICT (${identityColumns.join(', ')}) DO UPDATE
-                SET ${valueColums.map(name => `"${name}" = EXCLUDED."${name}"`).join(', ')}
+            ON CONFLICT (${identityColumns.map(quoted).join(', ')}) DO UPDATE
+                SET ${valueColums.map(name => `${quoted(name)} = EXCLUDED.${quoted(name)}`).join(', ')}
         `,
             values,
         );
@@ -111,7 +118,7 @@ export class KeyValueStoreWithColumnsUsingPg<
                     ? (toDatabaseValue?.(key[payloadKey]) ?? payloadKey)
                     : null,
             );
-            whereClauses.push(`${columnName} = $${values.length}`);
+            whereClauses.push(`${quoted(columnName)} = $${values.length}`);
         }
 
         const {rows} = await this.query<StoredRecord<Value>>(
@@ -142,7 +149,7 @@ export class KeyValueStoreWithColumnsUsingPg<
                     ? (toDatabaseValue?.(key[payloadKey]) ?? payloadKey)
                     : null,
             );
-            whereClauses.push(`${columnName} = $${values.length}`);
+            whereClauses.push(`${quoted(columnName)} = $${values.length}`);
         }
 
         await this.query(
