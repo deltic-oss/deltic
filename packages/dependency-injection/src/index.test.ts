@@ -843,8 +843,7 @@ describe('@deltic/dependency-injection', () => {
             expect(() => container.resolve(outerKey)).toThrow('database unavailable');
         });
 
-        // see .claude-work/issues/dependency-injection-throwing-factory-poisons-the-service-key.md
-        it.fails('reports the factory failure again when a failed resolution is retried', () => {
+        test('reports the factory failure again when a failed resolution is retried', () => {
             const key = container.register<Dependency>('broken', {
                 factory: () => {
                     throw new Error('database unavailable');
@@ -853,6 +852,27 @@ describe('@deltic/dependency-injection', () => {
 
             expect(() => container.resolve(key)).toThrow('database unavailable');
             expect(() => container.resolve(key)).toThrow('database unavailable');
+        });
+
+        test('a key stays resolvable after its proxy failed to construct the service', () => {
+            let attempts = 0;
+            const key = container.register<Dependency>('flaky', {
+                factory: () => {
+                    if (++attempts === 1) {
+                        throw new Error('database unavailable');
+                    }
+
+                    return new Dependency('flaky');
+                },
+            });
+            const proxy = container.resolveLazy(key);
+
+            expect(() => proxy.name).toThrow('database unavailable');
+
+            const instance = container.resolve(key);
+
+            expect(isProxy(instance)).toEqual(false);
+            expect(instance.name).toEqual('flaky');
         });
 
         // see .claude-work/issues/dependency-injection-circular-proxy-dereferenced-during-construction.md
