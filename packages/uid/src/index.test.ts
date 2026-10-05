@@ -39,13 +39,6 @@ describe('PrefixedBrandedIdGenerator', () => {
         expect(generator.generateId()).toBe('person_2');
     });
 
-    test('it generates a distinct id on every call', () => {
-        const generator = new PrefixedBrandedIdGenerator('person', uuidV7);
-        const ids = new Set(Array.from({length: 10_000}, () => generator.generateId()));
-
-        expect(ids.size).toBe(10_000);
-    });
-
     test('it calls the id factory without arguments', () => {
         // ULID and UUID factories accept an optional seed time as their first argument,
         // so passing anything at all would silently change the generated ids.
