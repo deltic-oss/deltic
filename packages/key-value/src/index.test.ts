@@ -296,8 +296,17 @@ describe('KeyValueStoreUsingPg', () => {
             expect(rows.map(row => row.tenant_id)).toEqual([tenantA, tenantB]);
         });
 
-        // see .claude-work/issues/key-value-pg-ignores-tenant-on-read-and-remove.md
-        it.fails('retrieving only returns the value of the current tenant', async () => {
+        test.each([
+            ['retrieving', (target: KeyValueStore<string, ExampleValue>) => target.retrieve('key')],
+            ['removing', (target: KeyValueStore<string, ExampleValue>) => target.remove('key')],
+            ['clearing', (target: KeyValueStore<string, ExampleValue>) => target.clear()],
+        ])('%s requires a resolvable tenant', async (_name, operation) => {
+            tenantContext.forget();
+
+            await expect(operation(tenantStore)).rejects.toThrow();
+        });
+
+        test('retrieving only returns the value of the current tenant', async () => {
             await tenantStore.persist('shared-key', 'tenant-a-value');
 
             tenantContext.use(tenantB);
@@ -305,8 +314,7 @@ describe('KeyValueStoreUsingPg', () => {
             expect(await tenantStore.retrieve('shared-key')).toBeUndefined();
         });
 
-        // see .claude-work/issues/key-value-pg-ignores-tenant-on-read-and-remove.md
-        it.fails('removing only removes the value of the current tenant', async () => {
+        test('removing only removes the value of the current tenant', async () => {
             await tenantStore.persist('shared-key', 'tenant-a-value');
             tenantContext.use(tenantB);
             await tenantStore.persist('shared-key', 'tenant-b-value');
@@ -319,8 +327,7 @@ describe('KeyValueStoreUsingPg', () => {
             expect(rows.map(row => row.tenant_id)).toEqual([tenantA]);
         });
 
-        // see .claude-work/issues/key-value-pg-clear-truncates-all-tenants.md
-        it.fails('clearing only removes the entries of the current tenant', async () => {
+        test('clearing only removes the entries of the current tenant', async () => {
             await tenantStore.persist('key-a', 'tenant-a-value');
             tenantContext.use(tenantB);
             await tenantStore.persist('key-b', 'tenant-b-value');

@@ -89,8 +89,9 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
     });
 
     afterEach(async () => {
-        await store.clear();
         await asyncPool.flush();
+        // clear() only reaches the current tenant, and tests switch tenants
+        await pool.query(`TRUNCATE TABLE ${testTableName}`);
     });
 
     afterAll(async () => {
@@ -220,6 +221,18 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
         await store.clear();
 
         expect(await store.retrieve(exampleIndex)).toBeUndefined();
+    });
+
+    test('clearing the store leaves the records of other tenants', async () => {
+        const firstTenant = tenantContext.mustResolve();
+        await store.persist(exampleIndex, example);
+        tenantContext.use(uuid.v7());
+        await store.persist(exampleIndex, example);
+
+        await store.clear();
+
+        const {rows} = await pool.query<{tenant_id: string}>(`SELECT tenant_id FROM ${testTableName}`);
+        expect(rows.map(row => row.tenant_id)).toEqual([firstTenant]);
     });
 
     test.each([
@@ -388,8 +401,7 @@ describe('KeyValueStoreWithColumnsUsingPg with a numeric tenant id', () => {
         expect(await store.retrieve({user_id: 'u1'})).toBeUndefined();
     });
 
-    // see .claude-work/issues/key-value-with-columns-ignores-falsy-tenant-id.md
-    it.fails('reading under tenant zero does not return the records of another tenant', async () => {
+    test('reading under tenant zero does not return the records of another tenant', async () => {
         await store.persist({user_id: 'u1'}, {user_id: 'u1', nickname: 'Seven'});
 
         numericTenantContext.use(0);
@@ -397,13 +409,22 @@ describe('KeyValueStoreWithColumnsUsingPg with a numeric tenant id', () => {
         expect(await store.retrieve({user_id: 'u1'})).toBeUndefined();
     });
 
-    // see .claude-work/issues/key-value-with-columns-ignores-falsy-tenant-id.md
-    it.fails('writing under tenant zero stores the record for tenant zero', async () => {
+    test('writing under tenant zero stores the record for tenant zero', async () => {
         numericTenantContext.use(0);
 
         await store.persist({user_id: 'u1'}, {user_id: 'u1', nickname: 'Zero'});
 
         const {rows} = await ownPool.query<{tenant_id: number}>(`SELECT tenant_id FROM ${numericTenantTable}`);
         expect(rows.map(row => row.tenant_id)).toEqual([0]);
+    });
+
+    test('removing under tenant zero leaves the records of another tenant', async () => {
+        await store.persist({user_id: 'u1'}, {user_id: 'u1', nickname: 'Seven'});
+        numericTenantContext.use(0);
+
+        await store.remove({user_id: 'u1'});
+
+        const {rows} = await ownPool.query<{tenant_id: number}>(`SELECT tenant_id FROM ${numericTenantTable}`);
+        expect(rows.map(row => row.tenant_id)).toEqual([7]);
     });
 });

@@ -45,7 +45,7 @@ export class KeyValueStoreUsingPg<
 
     async persist(key: Key, value: Value): Promise<void> {
         const resolvedKey = this.keyConversion(key);
-        const tenantId = this.tenantContext?.mustResolve();
+        const tenantId = this.databaseTenantId();
         const values: any[] = [resolvedKey, {value}];
         const references: string[] = ['$1', '$2'];
         const uniqueColumns = ['"key"'];
@@ -53,7 +53,7 @@ export class KeyValueStoreUsingPg<
         if (tenantId !== undefined) {
             references.push('$3');
             uniqueColumns.unshift('tenant_id');
-            values.unshift(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
+            values.unshift(tenantId);
         }
 
         await this.query(
@@ -67,24 +67,56 @@ export class KeyValueStoreUsingPg<
     }
 
     async retrieve(key: Key): Promise<Value | undefined> {
+        const {condition, values} = this.keyCondition(this.keyConversion(key));
         const result = await this.query<StoredRecord<Value>>(
             `
             SELECT "value"
             from ${this.tableName}
-            WHERE "key" = $1
+            WHERE ${condition}
             LIMIT 1`,
-            [this.keyConversion(key)],
+            values,
         );
 
         return result.rows[0]?.value?.value;
     }
 
     async remove(key: Key): Promise<void> {
-        await this.query(`DELETE FROM ${this.tableName} WHERE "key" = $1`, [this.keyConversion(key)]);
+        const {condition, values} = this.keyCondition(this.keyConversion(key));
+        await this.query(`DELETE FROM ${this.tableName} WHERE ${condition}`, values);
     }
 
     async clear(): Promise<void> {
-        await this.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+        const tenantId = this.databaseTenantId();
+
+        if (tenantId === undefined) {
+            await this.query(`DELETE FROM ${this.tableName}`);
+        } else {
+            await this.query(`DELETE FROM ${this.tableName} WHERE tenant_id = $1`, [tenantId]);
+        }
+    }
+
+    private keyCondition(resolvedKey: DatabaseKey): {condition: string; values: unknown[]} {
+        const tenantId = this.databaseTenantId();
+
+        if (tenantId === undefined) {
+            return {condition: '"key" = $1', values: [resolvedKey]};
+        }
+
+        return {condition: '"key" = $1 AND tenant_id = $2', values: [resolvedKey, tenantId]};
+    }
+
+    /**
+     * A store with a tenant context is scoped to the current tenant in every operation and refuses to
+     * operate when no tenant can be resolved.
+     */
+    private databaseTenantId(): string | number | undefined {
+        if (this.tenantContext === undefined) {
+            return undefined;
+        }
+
+        const tenantId = this.tenantContext.mustResolve();
+
+        return this.tenantIdConversion === undefined ? tenantId : this.tenantIdConversion.toDatabase(tenantId);
     }
 
     private async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []): Promise<QueryResult<Row>> {
