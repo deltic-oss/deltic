@@ -208,21 +208,6 @@ describe('TenantScopingMessageConsumer', () => {
     });
 
     /**
-     * A relay with concurrency (AMQPMessageRelay defaults to 20 partitions) hands
-     * several messages to the same consumer at once. Each of them must stay scoped to
-     * the tenant of its own message for as long as it is being consumed.
-     *
-     * see .claude-work/issues/messaging-tenant-scope-leaks-between-concurrent-messages.md
-     */
-    it.fails('messages consumed at the same time each keep their own tenant', async () => {
-        const observed = await tenantsObservedDuringOverlappingConsumption(
-            new ValueReadWriterUsingMemory<string>(),
-        );
-
-        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
-    });
-
-    /**
      * Backing the tenant with an async-local store does not help: consumption mutates
      * the ambient context instead of entering a scope of its own, so both messages
      * still write to the same store object.

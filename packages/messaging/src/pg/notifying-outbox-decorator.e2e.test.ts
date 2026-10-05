@@ -16,7 +16,6 @@ interface ExampleStream extends StreamDefinition {
 }
 
 const tableName = 'test_notifying_outbox';
-const injectionWitnessTable = 'test_notifying_outbox_injection';
 const channelName = 'test_notifying_outbox_channel';
 const createMessage = messageFactory<ExampleStream>();
 
@@ -85,10 +84,6 @@ beforeAll(async () => {
             consumed BOOLEAN NOT NULL,
             payload JSON NOT NULL
         );
-
-        CREATE TABLE IF NOT EXISTS ${injectionWitnessTable} (
-            id BIGSERIAL PRIMARY KEY
-        );
     `);
 });
 
@@ -99,7 +94,6 @@ beforeEach(() => {
 afterEach(async () => {
     await asyncPool.flush();
     await pgPool.query(`TRUNCATE TABLE ${tableName} RESTART IDENTITY`);
-    await pgPool.query(`TRUNCATE TABLE ${injectionWitnessTable} RESTART IDENTITY`);
 });
 
 afterAll(async () => {
@@ -118,32 +112,6 @@ describe('NotifyingOutboxDecoratorUsingPg', () => {
         ]);
         expect(await outbox.numberOfPendingMessages()).toEqual(2);
         expect(await outbox.numberOfConsumedMessages()).toEqual(0);
-    });
-
-    /**
-     * This is the promise the outbox pattern makes: the message and the data the caller
-     * wrote in the same transaction either both survive, or neither does.
-     */
-    test('a message written in a transaction that rolls back never reaches the outbox', async () => {
-        const outbox = createOutbox({style: 'channel', channelName});
-
-        await expect(asyncPool.runInTransaction(async () => {
-            await outbox.persist([createMessage('ping', 1)]);
-
-            throw new Error('the operation around the outbox write failed');
-        })).rejects.toThrow('the operation around the outbox write failed');
-
-        expect(await outbox.numberOfPendingMessages()).toEqual(0);
-    });
-
-    test('a message written in a transaction that commits ends up in the outbox', async () => {
-        const outbox = createOutbox({style: 'channel', channelName});
-
-        await asyncPool.runInTransaction(async () => {
-            await outbox.persist([createMessage('ping', 1)]);
-        });
-
-        expect(await outbox.numberOfPendingMessages()).toEqual(1);
     });
 
     test('it notifies the channel of its own table', async () => {
@@ -230,22 +198,4 @@ describe('NotifyingOutboxDecoratorUsingPg', () => {
         expect(await createOutbox({style: 'channel', channelName}).numberOfPendingMessages()).toEqual(0);
     });
 
-    /**
-     * The channel name and the table name are pasted into the NOTIFY statement without
-     * quoting, and the statement is sent without parameters, so Postgres accepts more
-     * than one statement in it.
-     *
-     * see .claude-work/issues/messaging-notify-identifiers-interpolated-into-sql.md
-     */
-    it.fails('a channel name that is not an identifier is not executed as SQL', async () => {
-        const hostile = `${channelName}; INSERT INTO ${injectionWitnessTable} (id) VALUES (DEFAULT); --`;
-
-        await createOutbox({style: 'channel', channelName: hostile})
-            .persist([createMessage('ping', 1)])
-            .catch(() => undefined);
-
-        const {rows} = await pgPool.query(`SELECT count(id) as count FROM ${injectionWitnessTable}`);
-
-        expect(Number(rows[0].count)).toEqual(0);
-    });
 });

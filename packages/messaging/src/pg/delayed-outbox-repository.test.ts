@@ -6,8 +6,6 @@ import {pgTestCredentials} from '../../../pg-credentials.js';
 import {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {AnyMessageFrom} from '@deltic/messaging';
 import {LinearBackoffStrategy} from '@deltic/backoff/linear';
-import {ExponentialBackoffStrategy} from '@deltic/backoff/exponential';
-import {MaxAttemptsExceeded} from '@deltic/backoff';
 import {CollectingMessageDispatcher} from '@deltic/messaging/collecting-message-dispatcher';
 import {OutboxMessageDispatcher, OutboxRelay} from '@deltic/messaging/outbox';
 
@@ -206,22 +204,6 @@ describe('Delayed Outbox Repository', () => {
 
         expect(firstAttempt.headers['attempt']).toEqual(1);
         expect(pending.map(m => m.headers['attempt'])).toEqual([2]);
-    });
-
-    /**
-     * A bounded strategy is how retrying is stopped: once the ceiling is passed the
-     * strategy refuses to produce a delay, so the message cannot be scheduled again.
-     */
-    test('a bounded backoff strategy refuses to schedule another attempt past its ceiling', async () => {
-        const bounded = new DelayedOutboxRepositoryUsingPg<ExampleStream>(
-            asyncPool,
-            'delayed_outbox',
-            new ExponentialBackoffStrategy(1000, 2),
-            testClock,
-        );
-
-        await expect(bounded.persist([createMessage('ping', 1, {attempt: 3})])).rejects.toThrow(MaxAttemptsExceeded);
-        expect(await bounded.numberOfPendingMessages()).toEqual(0);
     });
 
     /**

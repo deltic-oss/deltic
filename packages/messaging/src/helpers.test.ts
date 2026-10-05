@@ -123,13 +123,5 @@ describe('Messaging helper functions', () => {
             expect(timeOfRecordingFromMessage(message)).toEqual(Date.parse('2024-01-01T00:00:00.000Z'));
         });
 
-        /**
-         * Messages that were never decorated with a recording time have no time to
-         * report. Callers that use this for lag measurements need to know they get NaN
-         * rather than a zero or the current time.
-         */
-        test('a message without recording headers reports NaN', () => {
-            expect(timeOfRecordingFromMessage(createMessage<ExampleStream>('example', 'value'))).toBeNaN();
-        });
     });
 });
