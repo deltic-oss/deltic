@@ -185,6 +185,11 @@ its run with them — `start()` rejects — so the process can exit and be resta
 must not wait out the healing window, such as one serving a request, bounds each attempt with the
 pool's `connectionTimeout`, which fails with an ordinary `UnableToEstablishConnection`.
 
+A relay hands the consumer the message parsed from each delivery's JSON body. A delivery that cannot
+be read that way (not JSON, or not an object with a string `type`) is rejected without being
+requeued: it goes to the queue's dead-letter exchange when one is configured, and is dropped
+otherwise.
+
 ### Upcasting
 
 Handle schema evolution by transforming messages from older versions:

@@ -586,14 +586,13 @@ describe('AMQPMessageRelay', () => {
      * A queue can contain a message that this relay cannot deserialise, for instance
      * because a producer published something that is not JSON. That message must be
      * rejected so it can be dead-lettered, and must not take the delivery callback
-     * (and with it the whole consumer) down.
-     *
-     * see .claude-work/issues/messaging-poison-message-breaks-amqp-relay.md
+     * (and with it the channel) down.
      */
-    it.fails('a payload that is not valid JSON is rejected instead of breaking delivery', async () => {
+    test('a payload that is not valid JSON is rejected instead of breaking delivery', async () => {
+        const consumed: AnyMessageFrom<ExampleStream>[] = [];
         relay = new AMQPMessageRelay<ExampleStream>(
             pool.asChannelPool(),
-            consumerThatCollects([]),
+            consumerThatCollects(consumed),
             {queueNames: [queueName], maxDeliveryAttempts: 3},
         );
         void relay.start();
@@ -605,8 +604,52 @@ describe('AMQPMessageRelay', () => {
 
         await channel.outcomes(1);
 
+        expect(consumed).toEqual([]);
         expect(channel.acked).toHaveLength(0);
-        expect(channel.nacked).toHaveLength(1);
+        expect(channel.nacked.map(n => n.requeue)).toEqual([false]);
+    });
+
+    test('a message without headers is consumed with the headers the relay adds', async () => {
+        const consumed: AnyMessageFrom<ExampleStream>[] = [];
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            consumerThatCollects(consumed),
+            {queueNames: [queueName]},
+        );
+        void relay.start();
+        const channel = await waitForChannel(pool);
+
+        (await channel.deliveryTo(queueName))(amqpDeliveryOf('{"type": "example", "payload": {"value": "bare"}}'));
+        await channel.outcomes(1);
+
+        expect(consumed).toEqual([{type: 'example', payload: {value: 'bare'}, headers: {amqp_queue_name: queueName}}]);
+        expect(channel.acked).toHaveLength(1);
+    });
+
+    test.each([
+        ['an empty body', ''],
+        ['a JSON string', '"example"'],
+        ['JSON null', 'null'],
+        ['an object without a type', '{"payload": {}, "headers": {}}'],
+        ['headers that are not an object', '{"type": "example", "payload": {}, "headers": "none"}'],
+    ])('a delivery carrying %s is rejected without reaching the consumer', async (_description, body) => {
+        const consumed: AnyMessageFrom<ExampleStream>[] = [];
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            consumerThatCollects(consumed),
+            {queueNames: [queueName]},
+        );
+        void relay.start();
+        const channel = await waitForChannel(pool);
+        const deliver = await channel.deliveryTo(queueName);
+
+        deliver(amqpDeliveryOf(body));
+        deliver(amqpDeliveryFor(createMessage<ExampleStream>('example', {value: 'readable'})));
+        await channel.outcomes(2);
+
+        expect(consumed.map(m => m.payload)).toEqual([{value: 'readable'}]);
+        expect(channel.nacked.map(n => n.requeue)).toEqual([false]);
+        expect(channel.acked).toHaveLength(1);
     });
 
     /**

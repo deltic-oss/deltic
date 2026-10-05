@@ -49,6 +49,44 @@ type MessageToProcess<Stream extends StreamDefinition> = {
     message: AnyMessageFrom<Stream>;
 };
 
+/**
+ * Reads the message a delivery carries, or nothing when its body is not one: not JSON at all, or
+ * JSON that is not an object with a `type`. Missing headers are fine, the relay adds its own.
+ */
+function readMessage<Stream extends StreamDefinition>(amqp: AMQPMessage): AnyMessageFrom<Stream> | undefined {
+    let body: unknown;
+
+    try {
+        body = JSON.parse(amqp.content.toString());
+    } catch {
+        return undefined;
+    }
+
+    if (typeof body !== 'object' || body === null) {
+        return undefined;
+    }
+
+    const {type, headers} = body as {type?: unknown; headers?: unknown};
+
+    if (typeof type !== 'string') {
+        return undefined;
+    }
+
+    if (headers !== undefined && (typeof headers !== 'object' || headers === null || Array.isArray(headers))) {
+        return undefined;
+    }
+
+    return body as AnyMessageFrom<Stream>;
+}
+
+function rejectWithoutRequeue(channel: ConfirmChannel, amqp: AMQPMessage): void {
+    try {
+        channel.nack(amqp, false, false);
+    } catch {
+        // A channel that is closing already; the broker requeues what it leaves unsettled.
+    }
+}
+
 export class AMQPMessageRelay<Stream extends StreamDefinition> {
     private shuttingDown: boolean = false;
     private readonly startupIsolation = new StaticMutexUsingMemory();
@@ -204,7 +242,19 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
                         return;
                     }
 
-                    const message: AnyMessageFrom<Stream> = JSON.parse(amqp.content.toString() || '');
+                    const message = readMessage<Stream>(amqp);
+
+                    /**
+                     * amqplib closes the channel over anything this callback throws, and the broker
+                     * redelivers the message to the next channel, which it closes in turn. It will
+                     * never become readable, so it is rejected for good: dead-lettered when the
+                     * queue has a dead-letter exchange, dropped otherwise.
+                     */
+                    if (message === undefined) {
+                        rejectWithoutRequeue(channel, amqp);
+
+                        return;
+                    }
 
                     /**
                      * The processor and the error hook settle the delivery; the promise only
