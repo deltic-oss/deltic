@@ -1,7 +1,11 @@
 import {StandardError} from '@deltic/error-standard';
 
 export interface BackOffStrategy {
-    // Returns the delay to use for the next try, or undefined if max tries has been exceeded
+    /**
+     * The delay in milliseconds to apply before the given attempt. A strategy signals exhaustion
+     * by throwing `MaxAttemptsExceeded`; a strategy without a maximum never throws, so callers
+     * must bound their own retry loops.
+     */
     backOff: (attempt: number) => number;
 }
 
