@@ -2,13 +2,15 @@ interface Factory<T = any> {
     (container: DependencyContainer): T;
 }
 
+type Cleanup<T> = (instance: T) => Promise<void> | void;
+
 type ServiceDefinition<T = any> = {} & {
     factory: Factory<T>;
     lazy?: T extends object ? true : never;
 } & (
         | {
               cache?: true;
-              cleanup?: (instance: T) => Promise<void> | void;
+              cleanup?: Cleanup<T>;
           }
         | {
               cache: false;
@@ -19,16 +21,23 @@ type ServiceDefinition<T = any> = {} & {
 type InstanceDefinition<T = any> = {
     instance: T;
     cache?: true;
-    cleanup?: (instance: T) => Promise<void> | void;
+    cleanup?: Cleanup<T>;
+};
+
+type CreatedInstanceDefinition<T = any> = {
+    factory: Factory<T>;
+    cleanup?: Cleanup<T>;
 };
 
 /**
  * Represents a resolved service with its cleanup callback and direct dependencies.
- * Only services with cleanup callbacks are tracked.
+ * Services take part in the cleanup graph when their destruction needs ordering: they
+ * have a cleanup callback, they are constructed behind a proxy, or they are instances
+ * created through `createInstance`.
  */
 interface ResolvedService {
     key: string;
-    cleanup?: (instance: any) => Promise<void> | void;
+    cleanup?: Cleanup<any>;
     dependencies: Set<string>;
     instance: any;
 }
@@ -40,20 +49,39 @@ export type ServiceKey<Service> = string & {
 };
 
 export class DependencyContainer {
-    private cache: Record<string, any> = {};
-    private definitions: Record<string, ServiceDefinition> = {};
+    // Maps rather than plain objects: an object registry walks Object.prototype, so a service
+    // named `toString` or `valueOf` was reported as "already registered" on an empty container,
+    // and resolving an unregistered name that Object.prototype carries returned a native function
+    // instead of throwing.
+    private readonly cache = new Map<string, any>();
+    private readonly definitions = new Map<string, ServiceDefinition>();
 
-    // Only track resolved services that have cleanup callbacks
+    // Services that take part in the cleanup graph, see ResolvedService
     private readonly resolved = new Map<string, ResolvedService>();
+
+    /**
+     * Services that are transparent in the cleanup graph: they have nothing to clean up
+     * themselves, so they collect the cleanup candidates resolved beneath them. When such a
+     * service is served from cache, those candidates are attributed to the new consumer.
+     */
+    private readonly transparentDependencies = new Map<string, Set<string>>();
 
     // Stack to track current resolution chain
     private resolutionStack = new Set<string>();
+
+    // Created instances have no key of their own, this makes their bookkeeping addressable
+    private createdInstanceCount = 0;
+
+    // The cleanup that is running, if any. Shutdown is commonly triggered from more than one place
+    // at once (SIGTERM and SIGINT, a supervisor's deadline), and every trigger must wait for the
+    // same shutdown rather than run each hook a second time.
+    private cleanupInProgress: Promise<void> | undefined = undefined;
 
     register<Service, const Key extends string | ServiceKey<Service> = string>(
         key: Key,
         definition: ServiceDefinition<Service>,
     ): ServiceKey<Service> {
-        if (this.definitions[key] !== undefined) {
+        if (this.definitions.has(key)) {
             throw new Error(`Dependency ${key} is already registered`);
         }
 
@@ -65,12 +93,24 @@ export class DependencyContainer {
             definition.factory = () => proxy;
         }
 
-        this.definitions[key] = definition;
+        this.definitions.set(key, definition);
 
         return key as unknown as ServiceKey<Service>;
     }
 
-    async cleanup(): Promise<void> {
+    /**
+     * Shuts down every service that takes part in the cleanup graph. A call made while a cleanup
+     * is running joins that cleanup instead of starting another one, so every hook runs once.
+     */
+    cleanup(): Promise<void> {
+        this.cleanupInProgress ??= this.runCleanup().finally(() => {
+            this.cleanupInProgress = undefined;
+        });
+
+        return this.cleanupInProgress;
+    }
+
+    private async runCleanup(): Promise<void> {
         const levels = this.computeShutdownLevels();
 
         for (const level of levels) {
@@ -83,8 +123,9 @@ export class DependencyContainer {
             );
         }
 
-        this.cache = {};
+        this.cache.clear();
         this.resolved.clear();
+        this.transparentDependencies.clear();
     }
 
     /**
@@ -141,9 +182,12 @@ export class DependencyContainer {
 
     /**
      * Records a dependency relationship between the nearest ancestor that is a cleanup
-     * candidate. This may either be a lazy service, or a service with a cleanup callback.
+     * candidate. This may either be a lazy service, a service with a cleanup callback, or a
+     * created instance. Ancestors in between are transparent in the cleanup graph, they take
+     * note of what was resolved beneath them so a later cache hit can attribute the same
+     * dependencies to whoever consumes them next.
      */
-    private recordDependency(key: string): void {
+    private recordDependencies(dependencies: Iterable<string>): void {
         const resolutionStack = Array.from(this.resolutionStack).toReversed();
 
         // for loops are more performant than findLast
@@ -151,37 +195,103 @@ export class DependencyContainer {
             const ancestorService = this.resolved.get(ancestor);
 
             if (ancestorService) {
-                ancestorService.dependencies.add(key);
-                break; // Only record for the nearest parent
+                for (const dependency of dependencies) {
+                    ancestorService.dependencies.add(dependency);
+                }
+
+                return; // Only record for the nearest parent
+            }
+
+            const transparentAncestor = this.transparentDependencies.get(ancestor);
+
+            if (transparentAncestor) {
+                for (const dependency of dependencies) {
+                    transparentAncestor.add(dependency);
+                }
             }
         }
+    }
+
+    /**
+     * Services served from cache did not resolve their dependencies again, so the dependencies
+     * discovered during their construction are attributed to the current consumer.
+     */
+    private recordCachedDependencies(key: string): void {
+        if (this.resolved.has(key)) {
+            this.recordDependencies([key]);
+
+            return;
+        }
+
+        const transparentDependencies = this.transparentDependencies.get(key);
+
+        if (transparentDependencies !== undefined && transparentDependencies.size > 0) {
+            this.recordDependencies(transparentDependencies);
+        }
+    }
+
+    /**
+     * Adds a service to the cleanup graph. A service that was transparent until now inherits
+     * the dependencies it collected while it was.
+     */
+    private trackService(key: string, cleanup?: Cleanup<any>): ResolvedService {
+        const resolved: ResolvedService = {
+            key,
+            cleanup,
+            dependencies: this.transparentDependencies.get(key) ?? new Set(),
+            instance: undefined,
+        };
+
+        this.transparentDependencies.delete(key);
+        this.resolved.set(key, resolved);
+
+        return resolved;
     }
 
     registerInstance<Service extends object>(
         key: string | ServiceKey<Service>,
         definition: InstanceDefinition<Service>,
     ): ServiceKey<Service> {
-        if (this.definitions[key] !== undefined) {
+        if (this.definitions.has(key)) {
             throw new Error(`Dependency ${key} is already registered`);
         }
 
         const {cleanup, instance} = definition;
-        this.cache[key] = instance;
-        this.definitions[key] = {
+        this.cache.set(key, instance);
+        this.definitions.set(key, {
             ...definition,
             factory: () => instance,
-        };
+        });
 
         if (cleanup) {
-            this.resolved.set(key, {
-                key,
-                cleanup,
-                dependencies: new Set(),
-                instance,
-            });
+            this.trackService(key, cleanup).instance = instance;
         }
 
         return key as unknown as ServiceKey<Service>;
+    }
+
+    /**
+     * Creates an instance outside of the service registry. The factory resolves whatever it
+     * needs from the container, which makes the instance part of the cleanup graph: it is
+     * cleaned up before the services it depends on, and after whatever created it.
+     */
+    createInstance<Instance>(definition: CreatedInstanceDefinition<Instance>): Instance {
+        const {factory, cleanup} = definition;
+        // Created instances are never registered, this key only addresses the cleanup graph
+        const key = `@created-instance#${++this.createdInstanceCount}`;
+
+        // Track BEFORE executing the factory so that dependencies can record this
+        // instance as their parent
+        const resolved = this.trackService(key, cleanup);
+        this.recordDependencies([key]);
+
+        this.resolutionStack.add(key);
+        const instance = factory(this);
+        this.resolutionStack.delete(key);
+
+        resolved.instance = instance;
+
+        return instance;
     }
 
     private createProxyFor<Service extends object>(
@@ -190,25 +300,24 @@ export class DependencyContainer {
     ): Service {
         const {factory, cache = true, cleanup} = definition;
         const resolveInstance = () => {
-            const cached = this.cache[key];
-
-            if (cached) {
-                return cached;
+            // `has` rather than truthiness, so an intentionally falsy instance is cached too.
+            if (this.cache.has(key)) {
+                return this.cache.get(key);
             }
+
+            // Proxied services always take part in the cleanup graph, see resolveLazy. The
+            // service is tracked again when the proxy is first used after a cleanup.
+            const resolved = this.resolved.get(key) ?? this.trackService(key, cleanup);
 
             this.resolutionStack.add(key);
             const instance = factory(this);
             this.resolutionStack.delete(key);
 
+            resolved.instance = instance;
+
             if (cache) {
-                this.cache[key] = instance;
+                this.cache.set(key, instance);
             }
-
-            if (cleanup) {
-                this.resolved.get(key)!.instance = instance;
-            }
-
-            this.cache[key] = instance;
 
             return instance;
         };
@@ -231,13 +340,20 @@ export class DependencyContainer {
     }
 
     resolveLazy<Service extends object>(key: ServiceKey<Service>): Service {
-        const definition = this.definitions[key];
+        const definition = this.definitions.get(key);
 
         if (!definition) {
             throw new Error(`No definition found for key "${key}".`);
         }
 
-        this.recordDependency(key);
+        // A proxy postpones construction beyond the current resolution, which is why proxied
+        // services always take part in the cleanup graph: by the time their factory runs, the
+        // resolution stack no longer holds the ancestors that led here.
+        if (!this.resolved.has(key)) {
+            this.trackService(key, definition.cleanup);
+        }
+
+        this.recordDependencies([key]);
 
         return this.createProxyFor(key, definition);
     }
@@ -247,36 +363,32 @@ export class DependencyContainer {
             return this.resolveLazy<Service>(key);
         }
 
-        const cached = this.cache[key];
+        // `has` rather than truthiness, so an intentionally falsy instance is cached too.
+        if (this.cache.has(key)) {
+            this.recordCachedDependencies(key);
 
-        if (cached) {
-            // If this cached service has a cleanup callback, record the dependency
-            if (this.resolved.has(key)) {
-                this.recordDependency(key);
-            }
-
-            return cached;
+            return this.cache.get(key);
         }
 
-        const definition = this.definitions[key] as ServiceDefinition<Service>;
+        const definition = this.definitions.get(key) as ServiceDefinition<Service> | undefined;
 
         if (definition === undefined) {
             throw new Error(`No definition found for key "${key}".`);
         }
 
         const {factory, cleanup, cache = true, lazy = false} = definition;
+        let resolved: ResolvedService | undefined = undefined;
 
         // Register cleanup callback BEFORE executing factory so that child
         // dependencies can record this service as their parent
         if (cleanup || lazy) {
-            this.resolved.set(key, {
-                key,
-                cleanup,
-                dependencies: new Set(),
-                instance: undefined,
-            });
+            resolved = this.trackService(key, cleanup);
 
-            this.recordDependency(key);
+            this.recordDependencies([key]);
+        } else if (cache) {
+            // Nothing to clean up, but the instance is shared from here on, so it collects the
+            // dependencies that later consumers cannot discover for themselves
+            this.transparentDependencies.set(key, new Set());
         }
 
         this.resolutionStack.add(key);
@@ -284,11 +396,11 @@ export class DependencyContainer {
         this.resolutionStack.delete(key);
 
         if (cache && !lazy) {
-            if (cleanup) {
-                this.resolved.get(key)!.instance = instance;
+            if (resolved) {
+                resolved.instance = instance;
             }
 
-            this.cache[key] = instance;
+            this.cache.set(key, instance);
         }
 
         return instance;
