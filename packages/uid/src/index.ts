@@ -62,8 +62,9 @@ export class PrefixedBrandedIdConversion<
         private readonly conversion: IdConversion<string, DatabaseType>,
     ) {
         this.fullPrefix = `${prefix}_`;
-        this.fromDatabase.bind(this);
-        this.toDatabase.bind(this);
+        // Bound per instance, so the methods can be handed around as plain functions
+        this.fromDatabase = this.fromDatabase.bind(this);
+        this.toDatabase = this.toDatabase.bind(this);
     }
 
     fromDatabase(to: DatabaseType): PrefixedId<Prefix> {
