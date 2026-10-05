@@ -594,7 +594,8 @@ describe('KeyValueStoreUsingPg within a transaction', () => {
         expect(await pgStore.retrieve('rolled-back')).toBeUndefined();
     });
 
-    // see .claude-work/issues/key-value-pg-releases-shared-transaction-connection.md
+    // persist() hands the isolated transaction's connection back to the pool, after which the pool
+    // no longer recognises the transaction and refuses to finalise it
     it.fails('a value can be persisted inside an isolated transaction', async () => {
         await expect(
             ownAsyncPool.runInIsolatedTransaction(() => pgStore.persist('isolated', 'value')),
