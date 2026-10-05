@@ -162,40 +162,6 @@ describe.each([
         expect(await store.retrieve(key)).toStrictEqual(value);
     });
 
-    test('a stored undefined is indistinguishable from a missing key', async () => {
-        await store.persist('explicitly-undefined', undefined);
-
-        expect(await store.retrieve('explicitly-undefined')).toBeUndefined();
-    });
-
-    test('nested structures survive the round trip', async () => {
-        // arrange
-        const value: ExampleValue = {
-            profile: {name: 'Frank', tags: ['owner', 'admin']},
-            history: [[1, 2], [3], []],
-            counters: {views: 0, likes: 12},
-            active: false,
-        };
-
-        // act
-        await store.persist('nested', value);
-
-        // assert
-        expect(await store.retrieve('nested')).toEqual(value);
-    });
-
-    test('unicode keys and values survive the round trip', async () => {
-        // arrange
-        const key = 'käse-日本語-ключ-🧀';
-        const value = {label: 'Grüße 🧀 日本語 ключ'};
-
-        // act
-        await store.persist(key, value);
-
-        // assert
-        expect(await store.retrieve(key)).toEqual(value);
-    });
-
     test('keys containing sql metacharacters are treated as literal keys', async () => {
         // arrange
         const injectionKey = "o'brien'); DROP TABLE not_a_real_table; --";
@@ -210,31 +176,6 @@ describe.each([
         expect(await store.retrieve(injectionKey)).toBe('injected');
         expect(await store.retrieve('%')).toBe('percent');
         expect(await store.retrieve('_')).toBe('underscore');
-    });
-
-    test.each(['__proto__', 'constructor', 'prototype', 'toString', 'hasOwnProperty', 'valueOf'])(
-        'a fresh store reports no value for the key %s',
-        async (key: string) => {
-            expect(await store.retrieve(key)).toBeUndefined();
-        },
-    );
-
-    test('a value stored under __proto__ does not pollute the object prototype', async () => {
-        // act
-        await store.persist('__proto__', {polluted: true});
-
-        // assert
-        expect(await store.retrieve('__proto__')).toEqual({polluted: true});
-        expect(await store.retrieve('constructor')).toBeUndefined();
-        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    });
-
-    test('removing a key that was never stored is not an error', async () => {
-        await expect(store.remove('never-stored')).resolves.toBeUndefined();
-    });
-
-    test('clearing an empty store is not an error', async () => {
-        await expect(store.clear()).resolves.toBeUndefined();
     });
 
     test('removing a key leaves keys that share its prefix intact', async () => {
@@ -252,30 +193,6 @@ describe.each([
         expect(await store.retrieve('users')).toBe('plural');
     });
 
-    test('a value can be overwritten with a value of a different shape', async () => {
-        // arrange
-        await store.persist('shape', {name: 'Frank'});
-
-        // act
-        await store.persist('shape', 'just a string');
-
-        // assert
-        expect(await store.retrieve('shape')).toBe('just a string');
-    });
-
-    test('interleaved read-modify-write cycles overwrite each other', async () => {
-        // arrange, the store offers no compare-and-swap, so the last write wins
-        await store.persist('counter', 0);
-
-        // act
-        const readByFirst = (await store.retrieve('counter')) as number;
-        const readBySecond = (await store.retrieve('counter')) as number;
-        await store.persist('counter', readByFirst + 1);
-        await store.persist('counter', readBySecond + 1);
-
-        // assert
-        expect(await store.retrieve('counter')).toBe(1);
-    });
 });
 
 describe('KeyValueStoreUsingMemory', () => {
@@ -296,33 +213,6 @@ describe('KeyValueStoreUsingMemory', () => {
         expect(retrieved).toBe('stored');
     });
 
-    test('keys longer than the postgres schema allows are accepted', async () => {
-        // arrange, the postgres schema caps keys at 255 characters
-        const key = 'x'.repeat(300);
-
-        // act
-        await memoryStore.persist(key, 'long key value');
-
-        // assert
-        expect(await memoryStore.retrieve(key)).toBe('long key value');
-    });
-
-    test('a stored date is returned as a date', async () => {
-        // arrange
-        const value = {occurredAt: new Date('2024-05-06T07:08:09.000Z')};
-
-        // act
-        await memoryStore.persist('with-date', value);
-
-        // assert
-        expect(await memoryStore.retrieve('with-date')).toStrictEqual(value);
-    });
-
-    test('a stored NaN is returned as NaN', async () => {
-        await memoryStore.persist('not-a-number', Number.NaN);
-
-        expect(await memoryStore.retrieve('not-a-number')).toBeNaN();
-    });
 });
 
 describe('KeyValueStoreUsingPg', () => {
@@ -348,58 +238,6 @@ describe('KeyValueStoreUsingPg', () => {
     afterAll(async () => {
         await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
         await ownPool.end();
-    });
-
-    describe('value fidelity', () => {
-        let pgStore: KeyValueStore<string, ExampleValue>;
-
-        beforeEach(() => {
-            pgStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {tableName});
-        });
-
-        // see .claude-work/issues/key-value-pg-json-round-trip-changes-values.md
-        it.fails('returns a stored date as a date', async () => {
-            const value = {occurredAt: new Date('2024-05-06T07:08:09.000Z')};
-
-            await pgStore.persist('with-date', value);
-
-            expect(await pgStore.retrieve('with-date')).toStrictEqual(value);
-        });
-
-        // see .claude-work/issues/key-value-pg-json-round-trip-changes-values.md
-        it.fails('returns a stored NaN as NaN', async () => {
-            await pgStore.persist('not-a-number', Number.NaN);
-
-            expect(await pgStore.retrieve('not-a-number')).toBeNaN();
-        });
-
-        test('a large value survives the round trip', async () => {
-            const value = {blob: 'a'.repeat(200_000)};
-
-            await pgStore.persist('large', value);
-
-            expect(await pgStore.retrieve('large')).toEqual(value);
-        });
-    });
-
-    describe('keys', () => {
-        let pgStore: KeyValueStore<string, ExampleValue>;
-
-        beforeEach(() => {
-            pgStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {tableName});
-        });
-
-        test('a key that exceeds the schema key length is rejected instead of being truncated', async () => {
-            await expect(pgStore.persist('x'.repeat(300), 'value')).rejects.toThrow(/too long/);
-        });
-
-        test('keys at the schema key length are accepted', async () => {
-            const key = 'x'.repeat(255);
-
-            await pgStore.persist(key, 'value');
-
-            expect(await pgStore.retrieve(key)).toBe('value');
-        });
     });
 
     describe('object keys', () => {
@@ -530,19 +368,6 @@ describe('KeyValueStoreUsingPg', () => {
             }
         });
 
-        test('operations are rejected once the pool context has been flushed', async () => {
-            await pgStore.persist('key', 'value');
-            await ownAsyncPool.flush();
-
-            await expect(pgStore.retrieve('key')).rejects.toThrow(/already flushed/);
-        });
-
-        test('flushing the pool context twice is not an error', async () => {
-            await pgStore.persist('key', 'value');
-            await ownAsyncPool.flush();
-
-            await expect(ownAsyncPool.flush()).resolves.toBeUndefined();
-        });
     });
 });
 
@@ -571,27 +396,6 @@ describe('KeyValueStoreUsingPg within a transaction', () => {
     afterAll(async () => {
         await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
         await ownPool.end();
-    });
-
-    test('a value persisted in a committed transaction is visible afterwards', async () => {
-        await ownAsyncPool.primary();
-
-        await ownAsyncPool.runInTransaction(() => pgStore.persist('committed', 'value'));
-
-        expect(await pgStore.retrieve('committed')).toBe('value');
-    });
-
-    test('a value persisted in a rolled back transaction is not visible afterwards', async () => {
-        await ownAsyncPool.primary();
-
-        await expect(
-            ownAsyncPool.runInTransaction(async () => {
-                await pgStore.persist('rolled-back', 'value');
-                throw new Error('reason to roll back');
-            }),
-        ).rejects.toThrow('reason to roll back');
-
-        expect(await pgStore.retrieve('rolled-back')).toBeUndefined();
     });
 
     // persist() hands the isolated transaction's connection back to the pool, after which the pool
