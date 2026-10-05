@@ -97,6 +97,9 @@ conversion.toDatabase(userId);         // '0193a5f8-...' (prefix stripped)
 conversion.fromDatabase('0193a5f8-...'); // 'user_0193a5f8-...' (prefix added)
 ```
 
+`toDatabase` and `fromDatabase` are bound to their instance, so they can be passed around as plain functions,
+for example `ids.map(conversion.toDatabase)`.
+
 ### ULID to UUID Conversion
 
 ```typescript

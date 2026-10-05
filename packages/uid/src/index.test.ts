@@ -128,13 +128,13 @@ describe('PrefixedBrandedIdConversion', () => {
         expect(serialConversion.fromDatabase(42)).toBe('invoice_42');
     });
 
-    // see .claude-work/issues/uid-conversion-methods-are-not-bound.md
-    it.fails('it exposes conversion methods that can be passed as standalone callbacks', () => {
+    test('it exposes conversion methods that can be passed as standalone callbacks', () => {
         const ids = [generator.generateId(), generator.generateId()];
 
         const databaseValues = ids.map(conversion.toDatabase);
 
         expect(databaseValues).toEqual(ids.map(id => id.substring('person_'.length)));
+        expect(databaseValues.map(conversion.fromDatabase)).toEqual(ids);
     });
 
     // see .claude-work/issues/uid-conversion-silently-truncates-foreign-prefixes.md
