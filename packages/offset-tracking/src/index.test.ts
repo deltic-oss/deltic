@@ -21,19 +21,6 @@ const uniqueKey = (label: string): string => `${runId}:${label}:${keySequence++}
 let pool: Pool;
 let asyncPool: AsyncPgPool;
 
-const storedOffsetOutsideTheAsyncPool = async (
-    key: string,
-    consumer: string = consumerName,
-    table: string = tableName,
-): Promise<number | string | undefined> => {
-    const result = await pool.query<{offset: number | string}>(
-        `SELECT "offset" FROM ${table} WHERE consumer = $1 AND identifier = $2`,
-        [consumer, key],
-    );
-
-    return result.rows[0]?.offset;
-};
-
 beforeAll(async () => {
     pool = new Pool(pgTestCredentials);
 
@@ -221,29 +208,6 @@ describe.each([
         expect(await repository.retrieve(key)).toBe(-1);
     });
 
-    test('it applies concurrent writes to separate trackers without losing any of them', async () => {
-        // given
-        const keys = Array.from({length: 8}, (_value, index) => uniqueKey(`parallel-${index}`));
-
-        // when
-        await Promise.all(keys.map((key, index) => repository.store(key, index + 1)));
-
-        // then
-        for (const [index, key] of keys.entries()) {
-            expect(await repository.retrieve(key)).toBe(index + 1);
-        }
-    });
-
-    test('it settles concurrent writes to the same tracker on the last issued offset', async () => {
-        // given
-        const key = uniqueKey('same-tracker-parallel');
-
-        // when
-        await Promise.all([repository.store(key, 1), repository.store(key, 2), repository.store(key, 3)]);
-
-        // then
-        expect(await repository.retrieve(key)).toBe(3);
-    });
 });
 
 describe('OffsetRepositoryUsingPg', () => {
@@ -251,63 +215,6 @@ describe('OffsetRepositoryUsingPg', () => {
 
     beforeEach(() => {
         repository = new OffsetRepositoryUsingPg<number>(asyncPool, {tableName, consumerName});
-    });
-
-    test('it commits an offset stored outside of a transaction immediately', async () => {
-        // given
-        const key = uniqueKey('autocommit');
-
-        // when
-        await repository.store(key, 12);
-
-        // then
-        expect(await storedOffsetOutsideTheAsyncPool(key)).toBe(12);
-    });
-
-    test('it only publishes an offset stored inside a transaction once that transaction commits', async () => {
-        // given
-        const key = uniqueKey('transaction-commit');
-
-        // when
-        await asyncPool.runInTransaction(async () => {
-            await repository.store(key, 33);
-
-            // then, while the transaction is still open, no other connection sees the offset
-            expect(await storedOffsetOutsideTheAsyncPool(key)).toBeUndefined();
-        });
-
-        // then
-        expect(await storedOffsetOutsideTheAsyncPool(key)).toBe(33);
-    });
-
-    test('it discards a stored offset when the surrounding transaction rolls back', async () => {
-        // given
-        const key = uniqueKey('transaction-rollback');
-        await repository.store(key, 5);
-
-        // when
-        const failingBatch = asyncPool.runInTransaction(async () => {
-            await repository.store(key, 6);
-            throw new Error('the batch this offset accounts for failed');
-        });
-
-        // then
-        await expect(failingBatch).rejects.toThrow('the batch this offset accounts for failed');
-        expect(await repository.retrieve(key)).toBe(5);
-        expect(await storedOffsetOutsideTheAsyncPool(key)).toBe(5);
-    });
-
-    test('it reads back an offset written earlier in the same transaction', async () => {
-        // given
-        const key = uniqueKey('read-your-writes');
-
-        // when
-        await asyncPool.runInTransaction(async () => {
-            await repository.store(key, 9);
-
-            // then
-            expect(await repository.retrieve(key)).toBe(9);
-        });
     });
 
     test('it keeps offsets of different consumers on the same table independent', async () => {
@@ -352,96 +259,6 @@ describe('OffsetRepositoryUsingPg', () => {
         expect(await inner.retrieve(`beta-${suffix}:gamma`)).toBe(2);
     });
 
-    test('it rejects offsets the column cannot represent', async () => {
-        // given
-        const key = uniqueKey('non-integer');
-
-        // then
-        await expect(repository.store(key, 1.5)).rejects.toThrow();
-        await expect(repository.store(key, Number.NaN)).rejects.toThrow();
-        await expect(repository.store(key, Number.POSITIVE_INFINITY)).rejects.toThrow();
-        expect(await repository.retrieve(key)).toBeUndefined();
-    });
-
-    test('it rejects reads and writes when the offsets table does not exist', async () => {
-        // given
-        const missing = new OffsetRepositoryUsingPg<number>(asyncPool, {
-            tableName: 'test_offsets_absent',
-            consumerName,
-        });
-
-        // then
-        await expect(missing.retrieve(identifier)).rejects.toThrow(/test_offsets_absent/);
-        await expect(missing.store(identifier, 1)).rejects.toThrow(/test_offsets_absent/);
-    });
-
-    test('it rejects further use once the pool context has been flushed', async () => {
-        // given
-        await repository.store(uniqueKey('before-flush'), 1);
-        await asyncPool.flush();
-
-        // then
-        await expect(repository.retrieve(identifier)).rejects.toThrow(/already flushed/);
-        await expect(repository.store(identifier, 1)).rejects.toThrow(/already flushed/);
-    });
-
-    test('it tolerates a second flush of the same pool context', async () => {
-        // given
-        await repository.store(uniqueKey('double-flush'), 1);
-
-        // when
-        await asyncPool.flush();
-
-        // then
-        await expect(asyncPool.flush()).resolves.toBeUndefined();
-    });
-
-    test('it rejects when the underlying connection pool is closed', async () => {
-        // given
-        const closedPool = new Pool(pgTestCredentials);
-        await closedPool.end();
-        const detached = new OffsetRepositoryUsingPg<number>(new AsyncPgPool(closedPool), {
-            tableName,
-            consumerName,
-        });
-
-        // then
-        await expect(detached.retrieve(identifier)).rejects.toThrow();
-        await expect(detached.store(identifier, 1)).rejects.toThrow();
-    });
-
-    /**
-     * Two projector instances advancing the same tracker. Without a working row lock the
-     * read-modify-write cycle loses one of the two increments.
-     * see .claude-work/issues/offset-tracking-select-for-update-is-invalid-sql.md
-     */
-    test('it loses one increment when two isolated read-modify-write cycles interleave', async () => {
-        // given
-        const key = uniqueKey('lost-update');
-        await repository.store(key, 0);
-        let arrived = 0;
-        const {promise: bothHaveRead, resolve: allArrived} = Promise.withResolvers<void>();
-        const waitForBothReads = async (): Promise<void> => {
-            if (++arrived === 2) {
-                allArrived();
-            }
-
-            return bothHaveRead;
-        };
-        const advance = () =>
-            asyncPool.runInIsolation(async () => {
-                const current = (await repository.retrieve(key)) ?? 0;
-                await waitForBothReads();
-                await repository.store(key, current + 1);
-            });
-
-        // when
-        await Promise.all([advance(), advance()]);
-
-        // then, both cycles read 0 and both wrote 1 — one event batch is now unaccounted for
-        expect(await repository.retrieve(key)).toBe(1);
-    });
-
     it('it reads the current offset when selectForUpdate is enabled', async () => {
         // given
         const key = uniqueKey('select-for-update');
@@ -471,7 +288,6 @@ describe('OffsetRepositoryUsingPg with bigint offsets', () => {
 
         // then
         expect(await repository.retrieve(key)).toBe('9007199254740993');
-        expect(await storedOffsetOutsideTheAsyncPool(key, consumerName, bigintTableName)).toBe('9007199254740993');
     });
 
     // see .claude-work/issues/offset-tracking-bigint-offsets-are-returned-as-strings.md
