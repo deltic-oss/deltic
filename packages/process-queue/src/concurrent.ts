@@ -1,5 +1,5 @@
 import {type ProcessQueue, ProcessQueueDefaults, type ProcessQueueOptions} from './api.js';
-import {type ProcessStackItem} from './internals.js';
+import {type ProcessStackItem, rejectPurgedTasks} from './internals.js';
 import {WaitGroup} from '@deltic/wait-group';
 
 export class ConcurrentProcessQueue<Task> implements ProcessQueue<Task> {
@@ -25,7 +25,9 @@ export class ConcurrentProcessQueue<Task> implements ProcessQueue<Task> {
 
     public async purge() {
         await this.stop();
+        const purged = this.stack.filter(item => item.processing !== true);
         this.stack = [];
+        rejectPurgedTasks(purged);
         this.config.onStop(this);
     }
 

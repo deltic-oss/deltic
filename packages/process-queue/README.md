@@ -95,7 +95,7 @@ const queue = new ConcurrentProcessQueue<Job>({
 queue.start();
 await queue.push(job);
 await queue.stop();  // waits for in-flight tasks
-await queue.purge(); // clears pending tasks
+await queue.purge(); // drops pending tasks, rejecting them with TaskWasPurged
 ```
 
 ## API Reference
@@ -107,7 +107,7 @@ await queue.purge(); // clears pending tasks
 | `push(task)` | Adds a task to the queue |
 | `start()` | Starts processing |
 | `stop()` | Stops processing, waits for in-flight tasks |
-| `purge()` | Clears all pending tasks |
+| `purge()` | Stops processing and drops the pending tasks; their `push()` promises reject with `TaskWasPurged` |
 | `isProcessing()` | Returns `true` if the queue is started — whether or not work is in flight |
 
 ### `ProcessQueueOptions<Task>`

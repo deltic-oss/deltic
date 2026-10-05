@@ -1,3 +1,5 @@
+import {StandardError} from '@deltic/error-standard';
+
 export interface Processor<Task> {
     (task: Task): Promise<any>;
 }
@@ -26,6 +28,14 @@ export interface ProcessQueueOptions<Task> {
     stopOnError?: boolean;
     onStop?(queue: ProcessQueue<Task>): any;
     onFinish?(task: Task): Promise<any>;
+}
+
+export class TaskWasPurged extends StandardError {
+    static beforeItWasProcessed = () =>
+        new TaskWasPurged(
+            'The task was purged from the queue before it was processed',
+            'process_queue.task_was_purged',
+        );
 }
 
 export const ProcessQueueDefaults = Object.seal({

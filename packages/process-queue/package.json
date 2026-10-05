@@ -36,6 +36,7 @@
   "license": "ISC",
   "packageManager": "pnpm@10.12.4",
   "dependencies": {
+    "@deltic/error-standard": "workspace:^",
     "@deltic/wait-group": "workspace:^"
   },
   "repository": {

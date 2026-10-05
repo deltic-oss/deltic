@@ -1,5 +1,5 @@
 import {type ProcessQueue, ProcessQueueDefaults, type ProcessQueueOptions} from './api.js';
-import {type ProcessStackItem} from './internals.js';
+import {type ProcessStackItem, rejectPurgedTasks} from './internals.js';
 
 export class SequentialProcessQueue<Task> implements ProcessQueue<Task> {
     private nextTick: undefined | (() => void) = undefined;
@@ -22,7 +22,9 @@ export class SequentialProcessQueue<Task> implements ProcessQueue<Task> {
 
     public async purge() {
         await this.stop();
+        const purged = this.tasks;
         this.tasks = [];
+        rejectPurgedTasks(purged);
     }
 
     public start(): void {
