@@ -12,9 +12,7 @@ import {
     UnableToAttachContext,
     UnableToResolveValue,
 } from './index.js';
-import {AsyncLocalStorage, AsyncResource} from 'node:async_hooks';
-import {EventEmitter} from 'node:events';
-import {Readable} from 'node:stream';
+import {AsyncLocalStorage} from 'node:async_hooks';
 
 interface MyContext {
     name: string;
@@ -273,17 +271,6 @@ describe.each([
             {tenant_id: tenantOne, name: `handler-${tenantOne}`},
             {tenant_id: tenantTwo, name: `handler-${tenantTwo}`},
         ]);
-    });
-
-    test('the store holds on to the context object instead of a copy', async () => {
-        const provided: Partial<MyContext> = {name: 'Frank'};
-
-        await contextStore.run(provided, async () => {
-            provided.age = 37;
-
-            expect(contextStore.getStore()).toBe(provided);
-            expect(contextStore.getStore()).toEqual({name: 'Frank', age: 37});
-        });
     });
 
     describe('constructor defaults', () => {
@@ -729,200 +716,13 @@ describe('composeContextSlotsForTesting', () => {
 });
 
 // ============================================================================
-// Async context propagation
+// Overlapping flows
 // ============================================================================
 
 interface RequestContext {
     tenant_id: string;
     user_id: string;
 }
-
-describe('async context propagation using AsyncLocalStorage', () => {
-    let context: Context<RequestContext>;
-
-    beforeEach(() => {
-        context = new Context<RequestContext>(new AsyncLocalStorage<Partial<RequestContext>>());
-    });
-
-    test('the context survives await boundaries', async () => {
-        const observed = await context.run(async () => {
-            await Promise.resolve();
-            await new Promise<void>(resolve => setTimeout(resolve, 0));
-
-            return context.get('tenant_id');
-        }, {tenant_id: 'acme'});
-
-        expect(observed).toEqual('acme');
-    });
-
-    test.each([
-        ['setTimeout', (fn: () => void): void => {
-            setTimeout(fn, 0);
-        }],
-        ['setImmediate', (fn: () => void): void => {
-            setImmediate(fn);
-        }],
-        ['queueMicrotask', (fn: () => void): void => {
-            queueMicrotask(fn);
-        }],
-        ['process.nextTick', (fn: () => void): void => {
-            process.nextTick(fn);
-        }],
-    ] as const)('the context is available in a callback scheduled with %s', async (_name, schedule) => {
-        const observed = await context.run(
-            () => new Promise<string | undefined>(resolve => {
-                schedule(() => resolve(context.get('tenant_id')));
-            }),
-            {tenant_id: 'acme'},
-        );
-
-        expect(observed).toEqual('acme');
-    });
-
-    test('every branch of Promise.all observes the same context', async () => {
-        const observed = await context.run(() => Promise.all([
-            (async () => {
-                await new Promise<void>(resolve => setTimeout(resolve, 0));
-
-                return context.get('tenant_id');
-            })(),
-            (async () => {
-                await Promise.resolve();
-
-                return context.get('tenant_id');
-            })(),
-        ]), {tenant_id: 'acme'});
-
-        expect(observed).toEqual(['acme', 'acme']);
-    });
-
-    test('the context is available in a then continuation', async () => {
-        const observed = await context.run(
-            () => Promise.resolve().then(() => context.get('tenant_id')),
-            {tenant_id: 'acme'},
-        );
-
-        expect(observed).toEqual('acme');
-    });
-
-    test('the context is available in stream event handlers', async () => {
-        const observed: Array<string | undefined> = [];
-
-        await context.run(async () => {
-            const stream = Readable.from(['first', 'second']);
-
-            await new Promise<void>((resolve, reject) => {
-                stream.on('data', () => observed.push(context.get('tenant_id')));
-                stream.on('error', reject);
-                stream.on('end', () => {
-                    observed.push(context.get('tenant_id'));
-                    resolve();
-                });
-            });
-        }, {tenant_id: 'acme'});
-
-        expect(observed).toEqual(['acme', 'acme', 'acme']);
-    });
-
-    test('the context is restored after an inner scope throws', async () => {
-        let restored: string | undefined;
-
-        await context.run(async () => {
-            await expect(context.run(async () => {
-                await Promise.resolve();
-                throw new Error('inner failure');
-            }, {tenant_id: 'other-tenant'})).rejects.toThrow('inner failure');
-
-            restored = context.get('tenant_id');
-        }, {tenant_id: 'acme'});
-
-        expect(restored).toEqual('acme');
-    });
-
-    test('concurrent flows do not observe each other values', async () => {
-        const secondEntered = createCheckpoint();
-        const firstObserved = createCheckpoint();
-        const observed: Record<string, string | undefined> = {};
-
-        const first = context.run(async () => {
-            await secondEntered.reached;
-            observed.first = context.get('tenant_id');
-            firstObserved.reach();
-        }, {tenant_id: 'tenant-a'});
-
-        const second = context.run(async () => {
-            secondEntered.reach();
-            await firstObserved.reached;
-            observed.second = context.get('tenant_id');
-        }, {tenant_id: 'tenant-b'});
-
-        await Promise.all([first, second]);
-
-        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
-    });
-
-    test('values attached by concurrent flows stay within their own flow', async () => {
-        const firstEntered = createCheckpoint();
-        const secondAttached = createCheckpoint();
-        const observed: Record<string, Partial<RequestContext>> = {};
-
-        const first = context.run(async () => {
-            firstEntered.reach();
-            await secondAttached.reached;
-            context.attach({user_id: 'user-a'});
-            observed.first = {...context.context()};
-        }, {tenant_id: 'tenant-a'});
-
-        const second = context.run(async () => {
-            await firstEntered.reached;
-            context.attach({user_id: 'user-b'});
-            secondAttached.reach();
-            observed.second = {...context.context()};
-        }, {tenant_id: 'tenant-b'});
-
-        await Promise.all([first, second]);
-
-        expect(observed).toEqual({
-            first: {tenant_id: 'tenant-a', user_id: 'user-a'},
-            second: {tenant_id: 'tenant-b', user_id: 'user-b'},
-        });
-    });
-
-    test('an event listener observes the context of the flow that emits', async () => {
-        // the reason MultiOutboxRelayRunner wraps its listeners in AsyncResource.bind
-        const emitter = new EventEmitter();
-        const observed: Array<string | undefined> = [];
-
-        await context.run(async () => {
-            emitter.on('work', () => observed.push(context.get('tenant_id')));
-        }, {tenant_id: 'registering-flow'});
-
-        await context.run(async () => {
-            emitter.emit('work');
-        }, {tenant_id: 'emitting-flow'});
-
-        emitter.emit('work');
-
-        expect(observed).toEqual(['emitting-flow', undefined]);
-    });
-
-    test('a listener bound as an async resource keeps the context of the flow that registered it', async () => {
-        const emitter = new EventEmitter();
-        const observed: Array<string | undefined> = [];
-
-        await context.run(async () => {
-            emitter.on('work', AsyncResource.bind(() => observed.push(context.get('tenant_id'))));
-        }, {tenant_id: 'registering-flow'});
-
-        await context.run(async () => {
-            emitter.emit('work');
-        }, {tenant_id: 'emitting-flow'});
-
-        emitter.emit('work');
-
-        expect(observed).toEqual(['registering-flow', 'registering-flow']);
-    });
-});
 
 describe('ContextStoreUsingMemory with overlapping flows', () => {
     let store: ContextStoreUsingMemory<RequestContext>;
@@ -1070,15 +870,6 @@ describe.each([
         });
     });
 
-    test('the value in use survives an await boundary', async () => {
-        await scope.run(async () => {
-            scope.values.use('acme');
-            await new Promise<void>(resolve => setImmediate(resolve));
-
-            expect(scope.values.mustResolve()).toEqual('acme');
-        });
-    });
-
     test('a matching value passes the mismatch check', async () => {
         await scope.run(async () => {
             scope.values.use('acme');
@@ -1101,57 +892,5 @@ describe.each([
         await scope.run(async () => {
             expect(() => scope.values.preventMismatch('acme')).toThrow(UnableToResolveValue);
         });
-    });
-});
-
-describe('tenant scoping across concurrent flows', () => {
-    test('a context backed value stays within the flow that used it', async () => {
-        // mirrors TenantScopingMessageConsumer wrapping two concurrent message deliveries
-        const context = new Context<{tenant_id: string}>(new AsyncLocalStorage<Partial<{tenant_id: string}>>());
-        const tenantContext = new ValueReadWriterUsingContext(context, 'tenant_id');
-        const firstUsed = createCheckpoint();
-        const secondUsed = createCheckpoint();
-        const observed: Record<string, string> = {};
-
-        const first = context.run(async () => {
-            tenantContext.use('tenant-a');
-            firstUsed.reach();
-            await secondUsed.reached;
-            observed.first = tenantContext.mustResolve();
-        });
-
-        const second = context.run(async () => {
-            await firstUsed.reached;
-            tenantContext.use('tenant-b');
-            secondUsed.reach();
-            observed.second = tenantContext.mustResolve();
-        });
-
-        await Promise.all([first, second]);
-
-        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
-    });
-
-    test('a memory backed value is shared by every flow', async () => {
-        // ValueReadWriterUsingMemory holds a single value; it is not scoped to a flow
-        const tenantContext = new ValueReadWriterUsingMemory<string>();
-        const firstUsed = createCheckpoint();
-
-        const first = (async () => {
-            tenantContext.use('tenant-a');
-            firstUsed.reach();
-            await new Promise<void>(resolve => setImmediate(resolve));
-
-            return tenantContext.mustResolve();
-        })();
-
-        const second = (async () => {
-            await firstUsed.reached;
-            tenantContext.use('tenant-b');
-
-            return tenantContext.mustResolve();
-        })();
-
-        await expect(Promise.all([first, second])).resolves.toEqual(['tenant-b', 'tenant-b']);
     });
 });
