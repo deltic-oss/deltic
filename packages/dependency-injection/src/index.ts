@@ -363,6 +363,19 @@ export class DependencyContainer {
                 return this.cache.get(key);
             }
 
+            // The service is still being constructed further up this resolution. Constructing it
+            // again would hand this consumer a second instance of a shared service, one that is
+            // never cleaned up, and when both sides of a cycle do this it recurses until the stack
+            // overflows.
+            if (this.resolutionStack.has(key)) {
+                throw new Error(
+                    `Circular dependency: "${key}" was used while it was still being constructed ` +
+                        `(${[...this.resolutionStack, key].join(' -> ')}). A service that is handed ` +
+                        'out as a proxy can be stored during construction, but not used until its ' +
+                        'construction has finished.',
+                );
+            }
+
             // Proxied services always take part in the cleanup graph, see resolveLazy. The
             // service is tracked again when the proxy is first used after a cleanup.
             const tracked = this.resolved.get(key);
