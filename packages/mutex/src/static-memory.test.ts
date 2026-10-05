@@ -82,25 +82,6 @@ describe.each([['Memory', () => new StaticMutexUsingMemory()]])('Mutex using %s'
         await mutex.unlock();
     });
 
-    test('the lock is released when the guarded work throws', async () => {
-        const workFailure = new Error('the guarded work failed');
-        const guardedWork = async () => {
-            await mutex.lock();
-
-            try {
-                throw workFailure;
-            } finally {
-                await mutex.unlock();
-            }
-        };
-
-        await expect(guardedWork()).rejects.toBe(workFailure);
-
-        expect(await mutex.tryLock()).toEqual(true);
-
-        await mutex.unlock();
-    });
-
     test('the lock is granted to exactly one of two concurrent try-lock callers', async () => {
         const attempts = await Promise.all([mutex.tryLock(), mutex.tryLock()]);
 

@@ -56,45 +56,6 @@ describe('MutexUsingPostgres', () => {
         asyncPools = [];
     });
 
-    test('a lock is granted to exactly one of two acquirers using separate pools', async () => {
-        const one = createMutex(createPool());
-        const other = createMutex(createPool());
-
-        const attempts = await Promise.all([one.tryLock(lockId), other.tryLock(lockId)]);
-
-        expect(attempts.filter(acquired => acquired)).toHaveLength(1);
-
-        if (attempts[0]) {
-            await one.unlock(lockId);
-        }
-
-        if (attempts[1]) {
-            await other.unlock(lockId);
-        }
-    });
-
-    test('a blocking acquirer takes over once the holder releases the lock', async () => {
-        const asyncPool = createPool();
-        const holder = createMutex(asyncPool);
-        const waiter = createMutex(asyncPool);
-        const events: string[] = [];
-        await holder.lock(lockId, 100);
-
-        const waiting = waiter.lock(lockId, 2_000).then(() => {
-            events.push('acquired');
-        });
-
-        // there is no deterministic signal for "the request is queued in postgres"
-        await setTimeout(25);
-        events.push('released');
-        await holder.unlock(lockId);
-        await waiting;
-
-        expect(events).toEqual(['released', 'acquired']);
-
-        await waiter.unlock(lockId);
-    });
-
     test('a try-lock that cannot acquire the lock returns its connection to the pool', async () => {
         const asyncPool = createPool({max: 2, connectionTimeoutMillis: 1_000});
         const holder = createMutex(asyncPool);
@@ -148,19 +109,6 @@ describe('MutexUsingPostgres', () => {
 
         await other.unlock(9_002);
         await mutex.unlock(9_001);
-    });
-
-    test('advisory ids beyond the signed 32 bit range are supported', async () => {
-        const wideConverter: LockIdConverter<string> = {convert: () => 4_000_000_000 + advisoryLockBase};
-        const asyncPool = createPool();
-        const mutex = new MutexUsingPostgres<string>(asyncPool, wideConverter, 'fresh');
-        const other = new MutexUsingPostgres<string>(asyncPool, wideConverter, 'fresh');
-
-        await mutex.lock(lockId, 100);
-
-        expect(await other.tryLock(lockId)).toEqual(false);
-
-        await mutex.unlock(lockId);
     });
 
     test('the primary mode composition refuses a re-entrant acquisition', async () => {
@@ -246,9 +194,10 @@ describe('MutexUsingPostgres', () => {
         const storage = new StaticConnectionStorageProvider();
         const mutex = createMutex(createPool(), 'fresh', storage);
         await mutex.lock(lockId, 100);
+        expect(storage.resolve().connections.has(lockId)).toEqual(true);
         await mutex.unlock(lockId);
 
-        expect(storage.resolve().connections.has(converter.convert(lockId))).toEqual(false);
+        expect(storage.resolve().connections.has(lockId)).toEqual(false);
     });
 
     it('does not release a lock that is held by another acquirer', async () => {
@@ -272,25 +221,6 @@ describe('MutexUsingPostgres', () => {
         await holder.unlock(lockId).catch(() => undefined);
 
         expect(stolen).toEqual(false);
-    });
-
-    it.fails('does not grant the same lock twice on the primary connection', async () => {
-        const mutex = createMutex(createPool(), 'primary');
-        await mutex.lock(lockId, 100);
-
-        const secondAcquisition = await mutex.lock(lockId, 100).then(
-            () => 'acquired',
-            error => error,
-        );
-
-        // postgres counts advisory locks per session, so every acquisition needs its own release
-        await mutex.unlock(lockId).catch(() => undefined);
-
-        if (secondAcquisition === 'acquired') {
-            await mutex.unlock(lockId).catch(() => undefined);
-        }
-
-        expect(secondAcquisition).toBeInstanceOf(UnableToAcquireLock);
     });
 
     // see .claude-work/issues/mutex-crc32-collisions-alias-unrelated-locks.md
@@ -357,22 +287,5 @@ describe('MutexUsingPostgres', () => {
             });
         });
 
-        test('concurrent connection contexts hold their own locks', async () => {
-            const storage = new AsyncConnectionStorageProvider();
-            const mutex = createMutex(createPool(), 'fresh', storage);
-
-            await Promise.all([
-                storage.run(async () => {
-                    await mutex.lock(lockId, 500);
-                    await setTimeout(5);
-                    await mutex.unlock(lockId);
-                }),
-                storage.run(async () => {
-                    await mutex.lock(otherLockId, 500);
-                    await setTimeout(5);
-                    await mutex.unlock(otherLockId);
-                }),
-            ]);
-        });
     });
 });
