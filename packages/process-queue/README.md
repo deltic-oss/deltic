@@ -63,6 +63,10 @@ const queue = new PartitionedProcessQueue<Job>(
 await queue.push(job); // routed to partition based on tenantId
 ```
 
+Tasks with the same partition key always land on the same partition. Negative keys (a signed hash) and
+fractional keys (truncated) are mapped onto the available partitions; a non-negative whole key `k` lands on
+partition `k % numberOfPartitions`.
+
 ### Lifecycle Callbacks
 
 ```typescript

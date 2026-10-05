@@ -1238,14 +1238,29 @@ describe('@deltic/process-queue PartitionedProcessQueue', () => {
         expect(stopped).toEqual(1);
     });
 
-    // see .claude-work/issues/process-queue-negative-partition-keys.md
-    it.fails('routes tasks whose partition key is negative', async () => {
+    test('routes tasks whose partition key is negative', async () => {
         const processor = new GatedProcessor<string>();
         const processQueue = partitionedQueue(processor, 4);
         expect(() => processQueue.push({key: -3, id: 'negative'})).not.toThrow();
         processor.complete('negative');
         await flushTicks();
         expect(processor.settled).toEqual(['negative']);
+    });
+
+    test('tasks that share a negative or fractional partition key are processed in push order', async () => {
+        const processor = new GatedProcessor<string>();
+        const processQueue = partitionedQueue(processor, 4);
+        const pushed = [
+            processQueue.push({key: -3, id: 'a'}),
+            processQueue.push({key: -3, id: 'b'}),
+            processQueue.push({key: 2.5, id: 'c'}),
+        ];
+        await flushTicks();
+        expect(processor.started).toEqual(['a', 'c']);
+        processor.complete('a', 'b', 'c');
+        await Promise.all(pushed);
+        expect(processor.settled).toEqual(['a', 'c', 'b']);
+        await processQueue.stop();
     });
 
     test('calls the onStop hook when the queue is purged', async () => {
