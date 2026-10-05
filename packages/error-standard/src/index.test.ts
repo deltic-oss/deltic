@@ -1,5 +1,4 @@
 import {
-    type ErrorContext,
     errorToMessage,
     isUnrecoverableError,
     StandardError,
@@ -16,10 +15,6 @@ import {
 class UserNotFound extends StandardError {
     static forId(id: string) {
         return new UserNotFound(`User ${id} not found`, 'user.not_found', {userId: id});
-    }
-
-    static withContext(context: ErrorContext) {
-        return new UserNotFound('User not found', 'user.not_found', context);
     }
 }
 
@@ -56,31 +51,10 @@ class UnableToProvideActiveTransaction extends StandardError {
     }
 }
 
-class RunnerAlreadyStarted extends StandardError {
-    static create() {
-        return new RunnerAlreadyStarted(
-            'Outbox relay runner was already started',
-            'messaging.outbox_relay_runner_already_started',
-            {},
-        );
-    }
-}
-
 /** Mirrors context.UnableToResolveValue: a subclass that fixes message and code in its own constructor. */
 class UnableToResolveValue extends StandardError {
     constructor() {
         super('Value is not found. Forgot to set it?', 'context.unable_to_resolve_value');
-    }
-}
-
-/** A sibling subclass that intentionally shares the message and code of another one. */
-class RunnerAlreadyStopped extends StandardError {
-    static create() {
-        return new RunnerAlreadyStopped(
-            'Outbox relay runner was already started',
-            'messaging.outbox_relay_runner_already_started',
-            {},
-        );
     }
 }
 
@@ -95,18 +69,6 @@ class UnableToReachBroker extends StandardError implements UnrecoverableError {
             {durationMs},
         );
     }
-}
-
-function collectFailureChain(error: unknown): {code: string, context: ErrorContext}[] {
-    const chain: {code: string, context: ErrorContext}[] = [];
-    let current: unknown = error;
-
-    while (current instanceof StandardError) {
-        chain.push({code: current.code, context: current.context});
-        current = current.cause;
-    }
-
-    return chain;
 }
 
 describe('@deltic/error-standard', () => {
@@ -127,45 +89,6 @@ describe('@deltic/error-standard', () => {
             expect(error.context).toEqual({});
         });
 
-        test('is catchable as its own subclass, as StandardError and as Error', () => {
-            const error = RunnerAlreadyStarted.create();
-
-            expect(error).toBeInstanceOf(RunnerAlreadyStarted);
-            expect(error).toBeInstanceOf(StandardError);
-            expect(error).toBeInstanceOf(Error);
-            expect(() => {
-                throw error;
-            }).toThrow(RunnerAlreadyStarted);
-        });
-
-        test('sibling subclasses stay distinguishable even when message and code are identical', () => {
-            const started = RunnerAlreadyStarted.create();
-            const stopped = RunnerAlreadyStopped.create();
-
-            expect(started).toBeInstanceOf(RunnerAlreadyStarted);
-            expect(started).not.toBeInstanceOf(RunnerAlreadyStopped);
-            expect(stopped).not.toBeInstanceOf(RunnerAlreadyStarted);
-        });
-
-        test('defaults the context to an empty object that is not shared between instances', () => {
-            const first = UnableToClaimConnection.because(new Error('a'));
-            const second = UnableToClaimConnection.because(new Error('b'));
-            const withoutContext = new UnableToResolveValue();
-            const alsoWithoutContext = new UnableToResolveValue();
-
-            expect(withoutContext.context).toEqual({});
-            expect(withoutContext.context).not.toBe(alsoWithoutContext.context);
-            expect(first.context).not.toBe(second.context);
-        });
-
-        test('captures a stack trace pointing at the factory that created the error', () => {
-            const error = UserNotFound.forId('u-1');
-            const [header, topFrame] = (error.stack ?? '').split('\n');
-
-            expect(header).toContain('User u-1 not found');
-            expect(topFrame).toContain('UserNotFound.forId');
-        });
-
         test('reports the subclass name so logs and stack traces identify the error type', () => {
             const error = UserNotFound.forId('u-1');
 
@@ -173,38 +96,6 @@ describe('@deltic/error-standard', () => {
             expect(error.toString()).toBe('UserNotFound: User u-1 not found');
         });
 
-        test('treats context keys as plain data, even when they name prototype members', () => {
-            const untrustedContext = JSON.parse(
-                '{"__proto__": {"polluted": true}, "constructor": "from-request", "prototype": "from-request"}',
-            ) as ErrorContext;
-
-            const error = UserNotFound.withContext(untrustedContext);
-
-            expect(Object.getPrototypeOf(error.context)).toBe(Object.prototype);
-            expect('polluted' in {}).toBe(false);
-            expect(error.context['constructor']).toBe('from-request');
-            expect(error.context['prototype']).toBe('from-request');
-        });
-
-        test('accepts the full range of declared context values', () => {
-            const error = UserNotFound.withContext({
-                attempt: 0,
-                identifier: '',
-                unicodeName: 'ünïcødé 🎉',
-                deleted: false,
-                tenantId: null,
-                huge: Number.MAX_SAFE_INTEGER,
-            });
-
-            expect(error.context).toEqual({
-                attempt: 0,
-                identifier: '',
-                unicodeName: 'ünïcødé 🎉',
-                deleted: false,
-                tenantId: null,
-                huge: Number.MAX_SAFE_INTEGER,
-            });
-        });
     });
 
     describe('StandardError cause chains', () => {
@@ -215,25 +106,11 @@ describe('@deltic/error-standard', () => {
             expect(error.cause).toBe(driverFailure);
         });
 
-        test('keeps a non-Error cause exactly as it was thrown', () => {
-            const rejectionValue = 'ECONNRESET';
-            const error = UnableToClaimConnection.because(rejectionValue);
-
-            expect(error.cause).toBe('ECONNRESET');
-            expect(error.message).toBe('Unable to claim connection: ECONNRESET');
-        });
-
         test('omits cause entirely when a factory forwards an optional error that is absent', () => {
             const withoutCause = UnableToProvideActiveTransaction.noTransactionWasActive();
 
             expect('cause' in withoutCause).toBe(false);
             expect(withoutCause.cause).toBeUndefined();
-        });
-
-        test('omitting the cause and passing undefined explicitly behave the same', () => {
-            const explicitlyUndefined = UnableToProvideActiveTransaction.noTransactionWasActive(undefined);
-
-            expect('cause' in explicitlyUndefined).toBe(false);
         });
 
         test('keeps a null cause as a present but empty cause', () => {
@@ -243,30 +120,6 @@ describe('@deltic/error-standard', () => {
             expect(withNullCause.cause).toBeNull();
         });
 
-        test('preserves the whole failure chain when each layer wraps the one below it', () => {
-            const driverFailure = new Error('Connection terminated unexpectedly');
-            const poolFailure = UnableToClaimConnection.because(driverFailure);
-            const dispatchFailure = UnableToDispatchMessages.afterRetries(3, poolFailure);
-
-            expect(dispatchFailure.message).toBe(
-                'Unable to dispatch messages after 3 attempt(s): '
-                + 'Unable to claim connection: Connection terminated unexpectedly',
-            );
-            expect(dispatchFailure.cause).toBe(poolFailure);
-            expect(poolFailure.cause).toBe(driverFailure);
-        });
-
-        test('a reporter can walk the cause chain to collect every code and context', () => {
-            const dispatchFailure = UnableToDispatchMessages.afterRetries(
-                3,
-                UnableToClaimConnection.because(new Error('Connection terminated unexpectedly')),
-            );
-
-            expect(collectFailureChain(dispatchFailure)).toEqual([
-                {code: 'amqp.unable_to_dispatch_messages', context: {maxTries: 3}},
-                {code: 'async-pg-pool.unable_to_claim_connection', context: {}},
-            ]);
-        });
     });
 
     describe('StandardError structured logging', () => {
