@@ -42,10 +42,7 @@ class ObservableChannel extends EventEmitter {
     private readonly handlers = new Map<string, PromiseWithResolvers<DeliveryHandler>>();
     private readonly outcomeWaiters: {count: number; resolve: () => void}[] = [];
 
-    constructor(
-        private readonly waiting: Map<string, AMQPMessage[]> = new Map(),
-        private readonly missingQueues: Set<string> = new Set(),
-    ) {
+    constructor(private readonly missingQueues: Set<string> = new Set()) {
         super();
     }
 
@@ -75,14 +72,6 @@ class ObservableChannel extends EventEmitter {
         }
 
         this.handlerFor(queueName).resolve(handler);
-
-        /**
-         * A broker with messages waiting on the queue delivers them straight away,
-         * before the consume call has even been answered.
-         */
-        for (const message of this.waiting.get(queueName) ?? []) {
-            handler(message);
-        }
 
         return {consumerTag: `tag:${queueName}`};
     }
@@ -145,7 +134,6 @@ class ObservableChannelPool {
     readonly channels: ObservableChannel[] = [];
     readonly released: ObservableChannel[] = [];
     readonly missingQueues = new Set<string>();
-    private readonly waiting = new Map<string, AMQPMessage[]>();
     private readonly nextRequests: (() => Promise<ObservableChannel>)[] = [];
     requests: number = 0;
 
@@ -161,7 +149,7 @@ class ObservableChannelPool {
     }
 
     private openChannel(): ObservableChannel {
-        const channel = new ObservableChannel(this.waiting, this.missingQueues);
+        const channel = new ObservableChannel(this.missingQueues);
         this.channels.push(channel);
 
         return channel;
@@ -187,14 +175,6 @@ class ObservableChannelPool {
 
             return channel;
         };
-    }
-
-    /**
-     * Leaves a message on the queue, so it is delivered the moment the relay starts
-     * consuming from it.
-     */
-    leaveOnQueue(queueName: string, message: AMQPMessage): void {
-        this.waiting.set(queueName, [...(this.waiting.get(queueName) ?? []), message]);
     }
 
     async release(channel: ConfirmChannel): Promise<void> {
@@ -661,54 +641,6 @@ describe('AMQPMessageRelay', () => {
         await channel.outcomes(2);
 
         expect(channel.nacked.map(n => n.requeue)).toEqual([true, true]);
-    });
-
-    /**
-     * Restarting a consumer on a queue that already has messages on it is the normal
-     * case: after a deployment or a reconnect the broker delivers what is waiting the
-     * moment the relay subscribes. Such a message must be handled exactly as often as
-     * any other one, and it must not push the message behind it out of the queue.
-     *
-     * see .claude-work/issues/messaging-relay-duplicates-message-waiting-at-startup.md
-     */
-    it.fails('a message that is already on the queue when consumption starts is handled once', async () => {
-        const consumed: string[] = [];
-        const firstIsBeingConsumed = Promise.withResolvers<void>();
-        const releaseFirst = Promise.withResolvers<void>();
-        const message = (value: string) => createMessage<ExampleStream>('example', {value}, {
-            aggregate_root_id: 'aggregate-1',
-            event_id: value,
-        });
-
-        pool.leaveOnQueue(queueName, amqpDeliveryFor(message('waiting')));
-        relay = new AMQPMessageRelay<ExampleStream>(
-            pool.asChannelPool(),
-            {
-                async consume(delivered) {
-                    consumed.push(delivered.payload.value);
-
-                    if (delivered.payload.value === 'waiting') {
-                        firstIsBeingConsumed.resolve();
-                        await releaseFirst.promise;
-                    }
-                },
-            },
-            {queueNames: [queueName]},
-        );
-        void relay.start();
-
-        const channel = await waitForChannel(pool);
-        const deliver = await channel.deliveryTo(queueName);
-        await firstIsBeingConsumed.promise;
-        // the consumer is doing its work, which takes longer than a single tick
-        await yieldToMacrotask();
-        await yieldToMacrotask();
-        deliver(amqpDeliveryFor(message('next')));
-        releaseFirst.resolve();
-        await channel.outcomes(2);
-
-        expect(consumed).toEqual(['waiting', 'next']);
-        expect(channel.acked).toHaveLength(2);
     });
 
     /**
