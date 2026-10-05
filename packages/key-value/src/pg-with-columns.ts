@@ -1,4 +1,5 @@
 import type {KeyValueStore} from './index.js';
+import type {QueryResult, QueryResultRow} from 'pg';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {ValueReader} from '@deltic/context';
 import type {IdConversion} from '@deltic/uid';
@@ -52,7 +53,6 @@ export class KeyValueStoreWithColumnsUsingPg<
     }
 
     async persist(key: Key, value: Value): Promise<void> {
-        const conn = await this.pool.primary();
         const identityColumns: string[] = [];
         const valueColums: string[] = [];
         const references: string[] = [];
@@ -84,7 +84,7 @@ export class KeyValueStoreWithColumnsUsingPg<
         values.push({value});
         references.push(`$${values.length}`);
 
-        await conn.query(
+        await this.query(
             `
             INSERT INTO ${this.tableName} (${[...identityColumns, ...valueColums].map(name => `"${name}"`).join(', ')})
                 VALUES (${references.join(', ')})
@@ -96,7 +96,6 @@ export class KeyValueStoreWithColumnsUsingPg<
     }
 
     async retrieve(key: Key): Promise<Value | undefined> {
-        const conn = await this.pool.primary();
         const whereClauses: string[] = [];
         const values: any[] = [];
         const tenantId = this.tenantContext?.mustResolve();
@@ -115,7 +114,7 @@ export class KeyValueStoreWithColumnsUsingPg<
             whereClauses.push(`${columnName} = $${values.length}`);
         }
 
-        const {rows} = await conn.query<StoredRecord<Value>>(
+        const {rows} = await this.query<StoredRecord<Value>>(
             `
             SELECT deltic_payload FROM ${this.tableName}
             WHERE ${whereClauses.join(' AND ')}
@@ -128,7 +127,6 @@ export class KeyValueStoreWithColumnsUsingPg<
     }
 
     async remove(key: Key): Promise<void> {
-        const conn = await this.pool.primary();
         const whereClauses: string[] = [];
         const values: any[] = [];
         const tenantId = this.tenantContext?.mustResolve();
@@ -147,7 +145,7 @@ export class KeyValueStoreWithColumnsUsingPg<
             whereClauses.push(`${columnName} = $${values.length}`);
         }
 
-        await conn.query(
+        await this.query(
             `
             DELETE FROM ${this.tableName}
             WHERE ${whereClauses.join(' AND ')}
@@ -157,8 +155,21 @@ export class KeyValueStoreWithColumnsUsingPg<
     }
 
     async clear(): Promise<void> {
-        const conn = await this.pool.primary();
-        await conn.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+        await this.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+    }
+
+    private async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []): Promise<QueryResult<Row>> {
+        const connection = await this.pool.primary();
+        const inTransaction = this.pool.inTransaction();
+
+        try {
+            return await connection.query<Row>(sql, values);
+        } finally {
+            // The connection of an open transaction belongs to whoever finalises the transaction
+            if (!inTransaction) {
+                await this.pool.release(connection);
+            }
+        }
     }
 
     private resolveColumnParameter<Columns extends ObjectType>(
