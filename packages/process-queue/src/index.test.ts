@@ -368,8 +368,7 @@ describe.each([
         await processQueue.stop();
     });
 
-    // see .claude-work/issues/process-queue-synchronous-processor-error-crashes-the-process.md
-    it.fails('reports a synchronously thrown processor error to the error handler', async () => {
+    test('reports a synchronously thrown processor error to the error handler', async () => {
         const handled: unknown[] = [];
         const completed = async (): Promise<void> => {};
         const processQueue = factory({
@@ -387,20 +386,21 @@ describe.each([
                 return completed();
             },
         });
-        await withoutProcessErrorHandlers('uncaughtException', async () => {
+        const uncaught = await withoutProcessErrorHandlers('uncaughtException', async () => {
             processQueue.push('invalid').catch(() => {});
             await flushTicks(20);
         });
         expect(handled).toHaveLength(1);
+        expect(uncaught).toEqual([]);
+        await processQueue.stop();
     });
 
-    // see .claude-work/issues/process-queue-hook-rejection-wedges-the-queue.md
-    it.fails('keeps processing the remaining tasks when the error handler rejects', async () => {
+    test('keeps processing the remaining tasks when the error handler rejects', async () => {
         const processed: string[] = [];
         const processQueue = factory({
             maxProcessing: 1,
-            stopOnError: false,
-            onError: async () => {
+            onError: async ({skipCurrentTask}) => {
+                skipCurrentTask();
                 throw new Error('the error handler itself failed');
             },
             processor: async (task: string) => {
@@ -411,19 +411,40 @@ describe.each([
                 }
             },
         });
-        await withoutProcessErrorHandlers('unhandledRejection', async () => {
+        const unhandled = await withoutProcessErrorHandlers('unhandledRejection', async () => {
             processQueue.push('a').catch(() => {});
             processQueue.push('b').catch(() => {});
             await flushTicks(20);
         });
         expect(processed).toEqual(['a', 'b']);
+        expect(unhandled).toEqual([]);
+        await processQueue.stop();
     });
 
-    // see .claude-work/issues/process-queue-hook-rejection-wedges-the-queue.md
-    it.fails('does not leave an unhandled rejection behind when the error handler rejects', async () => {
+    test('treats an error handler that rejects before skipping the task as one that did not skip it', async () => {
+        const processed: string[] = [];
+        const failure = new Error('cannot process this task');
         const processQueue = factory({
             maxProcessing: 1,
-            stopOnError: false,
+            onError: async () => {
+                throw new Error('the error handler itself failed');
+            },
+            processor: async (task: string) => {
+                processed.push(task);
+                throw failure;
+            },
+        });
+        const outcome = processQueue.push('a');
+        processQueue.push('b').catch(() => {});
+        await expect(outcome).rejects.toBe(failure);
+        await flushTicks();
+        expect(processed).toEqual(['a']);
+        expect(processQueue.isProcessing()).toBe(false);
+    });
+
+    test('does not leave an unhandled rejection behind when the error handler rejects', async () => {
+        const processQueue = factory({
+            maxProcessing: 1,
             onError: async () => {
                 throw new Error('the error handler itself failed');
             },
@@ -436,31 +457,76 @@ describe.each([
             await flushTicks(20);
         });
         expect(unhandled).toEqual([]);
+        await processQueue.stop();
     });
 
-    // see .claude-work/issues/process-queue-hook-rejection-wedges-the-queue.md
-    it.fails('keeps processing the remaining tasks when the onFinish hook rejects', async () => {
+    test('keeps processing the remaining tasks when the onFinish hook rejects', async () => {
         const processed: string[] = [];
+        const finishFailure = new Error('the finish hook failed');
         const processQueue = factory({
             maxProcessing: 1,
             onError: async () => {},
-            onFinish: async () => {
-                throw new Error('the finish hook failed');
+            onFinish: async (task: string) => {
+                if (task === 'a') {
+                    throw finishFailure;
+                }
             },
             processor: async (task: string) => {
                 processed.push(task);
             },
         });
-        await withoutProcessErrorHandlers('unhandledRejection', async () => {
-            processQueue.push('a');
-            processQueue.push('b');
-            await flushTicks(20);
-        });
+        const first = processQueue.push('a');
+        const second = processQueue.push('b');
+        await expect(first).rejects.toBe(finishFailure);
+        await expect(second).resolves.toEqual('b');
         expect(processed).toEqual(['a', 'b']);
+        await processQueue.stop();
     });
 
-    // see .claude-work/issues/process-queue-stop-does-not-track-in-flight-work.md
-    it.fails('does not resolve stop() while the onFinish hook is still running', async () => {
+    test('does not leave an unhandled rejection behind when the onDrained or onStop hook rejects', async () => {
+        const processQueue = factory({
+            onError: async () => {},
+            onDrained: async () => {
+                throw new Error('the drained hook failed');
+            },
+            onStop: async () => {
+                throw new Error('the stop hook failed');
+            },
+            processor: async () => {},
+        });
+        const unhandled = await withoutProcessErrorHandlers('unhandledRejection', async () => {
+            await processQueue.push('a');
+            await processQueue.stop();
+            await flushTicks();
+        });
+        expect(unhandled).toEqual([]);
+    });
+
+    test('a task occupies its slot until its onFinish hook has returned', async () => {
+        const finishing = Promise.withResolvers<void>();
+        const started: string[] = [];
+        const processQueue = factory({
+            maxProcessing: 1,
+            onError: async () => {},
+            onFinish: async (task: string) => {
+                if (task === 'a') {
+                    await finishing.promise;
+                }
+            },
+            processor: async (task: string) => {
+                started.push(task);
+            },
+        });
+        const pushed = [processQueue.push('a'), processQueue.push('b')];
+        await flushTicks();
+        expect(started).toEqual(['a']);
+        finishing.resolve();
+        await Promise.all(pushed);
+        expect(started).toEqual(['a', 'b']);
+        await processQueue.stop();
+    });
+
+    test('does not resolve stop() while the onFinish hook is still running', async () => {
         const finishing = Promise.withResolvers<void>();
         let finished = false;
         const processQueue = factory({
@@ -482,6 +548,83 @@ describe.each([
         expect(finished).toBe(true);
     });
 
+    test('the onStop hook is called once each time the queue comes to a stop', async () => {
+        let stopped = 0;
+        const processQueue = factory({
+            onError: async () => {},
+            onStop: () => {
+                stopped++;
+            },
+            processor: async () => {},
+        });
+        await processQueue.stop();
+        expect(stopped).toEqual(1);
+        await processQueue.stop();
+        await processQueue.purge();
+        expect(stopped).toEqual(1);
+        processQueue.start();
+        await processQueue.purge();
+        expect(stopped).toEqual(2);
+    });
+
+    test('the onStop hook is not called for a queue that was never started', async () => {
+        let stopped = 0;
+        const processQueue = factory({
+            autoStart: false,
+            onError: async () => {},
+            onStop: () => {
+                stopped++;
+            },
+            processor: async () => {},
+        });
+        await processQueue.stop();
+        expect(stopped).toEqual(0);
+    });
+
+    test('the onDrained hook can stop the queue without waiting for itself', async () => {
+        const stopped = Promise.withResolvers<void>();
+        const processQueue: ProcessQueue<string> = factory({
+            onError: async () => {},
+            onDrained: async queue => {
+                await queue.stop();
+                stopped.resolve();
+            },
+            processor: async () => {},
+        });
+        await processQueue.push('a');
+        await stopped.promise;
+        expect(processQueue.isProcessing()).toBe(false);
+    });
+
+    test('the task a queue stopped on is processed again once the queue is started again', async () => {
+        const processed: string[] = [];
+        let attempts = 0;
+        const processQueue = factory({
+            maxProcessing: 1,
+            onError: async () => {},
+            processor: async (task: string) => {
+                attempts++;
+
+                if (attempts === 1) {
+                    throw new Error('cannot process this task yet');
+                }
+
+                processed.push(task);
+            },
+        });
+        const first = processQueue.push('a');
+        first.catch(() => {});
+        const second = processQueue.push('b');
+        await expect(first).rejects.toThrow('cannot process this task yet');
+        await flushTicks();
+        expect(processQueue.isProcessing()).toBe(false);
+        expect(processed).toEqual([]);
+        processQueue.start();
+        await second;
+        expect(processed).toEqual(['a', 'b']);
+        await processQueue.stop();
+    });
+
     // see .claude-work/issues/process-queue-purge-abandons-queued-tasks.md
     it.fails('settles the promises of the tasks it purges', async () => {
         const processQueue = factory({
@@ -497,6 +640,35 @@ describe.each([
         await processQueue.purge();
         await flushTicks();
         expect(outcome).toEqual('rejected');
+    });
+});
+
+describe.each([
+    ['sequential', createSequentialProcessor],
+    ['concurrent', createConcurrentProcessor],
+])('@deltic/process-queue %s, stopping itself', (_type: string, factory: Factory) => {
+    test('the onStop hook is called once the queue has stopped itself because a task failed', async () => {
+        const processor = new GatedProcessor<string>();
+        let stopped = 0;
+        const processQueue = factory({
+            maxProcessing: 2,
+            onError: async () => {},
+            onStop: () => {
+                stopped++;
+            },
+            processor: processor.process,
+        });
+        processQueue.push('failing').catch(() => {});
+        processQueue.push('other');
+        await flushTicks();
+        processor.fail('failing', new Error('cannot process this task'));
+        await flushTicks();
+        expect(processQueue.isProcessing()).toBe(false);
+        processor.complete('other');
+        await flushTicks();
+        expect(stopped).toEqual(1);
+        await processQueue.stop();
+        expect(stopped).toEqual(1);
     });
 });
 
@@ -561,27 +733,31 @@ describe('@deltic/process-queue SequentialProcessQueue', () => {
         await processQueue.stop();
     });
 
-    test('the onStop hook is called when the queue is stopped and when it is purged', async () => {
-        let stopped = 0;
+    test('stops processing a failing task when stopOnError is enabled', async () => {
+        let attempts = 0;
+        const handled = Promise.withResolvers<void>();
         const processQueue = new SequentialProcessQueue<string>({
-            onError: async () => {},
-            onStop: () => {
-                stopped++;
+            stopOnError: true,
+            onError: async () => {
+                handled.resolve();
             },
-            processor: async () => {},
+            processor: async () => {
+                attempts++;
+                throw new Error('cannot process this task');
+            },
         });
-        await processQueue.stop();
-        expect(stopped).toEqual(1);
-        await processQueue.purge();
-        expect(stopped).toEqual(2);
+        processQueue.push('a').catch(() => {});
+        await handled.promise;
+        await flushTicks();
+        expect(attempts).toEqual(1);
+        expect(processQueue.isProcessing()).toBe(false);
     });
 
-    // see .claude-work/issues/process-queue-sequential-ignores-stop-on-error.md
-    it.fails('stops processing a failing task when stopOnError is enabled', async () => {
+    test('a failing task is retried until the error handler skips it when stopOnError is disabled', async () => {
         let attempts = 0;
         const {promise, resolve} = Promise.withResolvers<void>();
         const processQueue = new SequentialProcessQueue<string>({
-            stopOnError: true,
+            stopOnError: false,
             onError: async ({skipCurrentTask}) => {
                 if (attempts >= 3) {
                     skipCurrentTask();
@@ -596,11 +772,10 @@ describe('@deltic/process-queue SequentialProcessQueue', () => {
         processQueue.push('a').catch(() => {});
         await promise;
         await processQueue.stop();
-        expect(attempts).toEqual(1);
+        expect(attempts).toEqual(3);
     });
 
-    // see .claude-work/issues/process-queue-restarting-while-a-task-is-in-flight.md
-    it.fails('processes every task exactly once when it is started again while a task is in flight', async () => {
+    test('processes every task exactly once when it is started again while a task is in flight', async () => {
         const attempts: string[] = [];
         const processor = new GatedProcessor<string>();
         const processQueue = new SequentialProcessQueue<string>({
@@ -792,8 +967,7 @@ describe('@deltic/process-queue ConcurrentProcessQueue', () => {
         await processQueue.stop();
     });
 
-    // see .claude-work/issues/process-queue-cannot-be-restarted-after-stopping.md
-    it.fails('resumes the tasks that are still queued after stop() and start()', async () => {
+    test('resumes the tasks that are still queued after stop() and start()', async () => {
         const processed: string[] = [];
         const processQueue = new ConcurrentProcessQueue<string>({
             onError: async () => {},
@@ -808,8 +982,7 @@ describe('@deltic/process-queue ConcurrentProcessQueue', () => {
         expect(processed).toEqual(['a']);
     });
 
-    // see .claude-work/issues/process-queue-cannot-be-restarted-after-stopping.md
-    it.fails('processes tasks pushed after purge() and start()', async () => {
+    test('processes tasks pushed after purge() and start()', async () => {
         const processed: string[] = [];
         const processQueue = new ConcurrentProcessQueue<string>({
             onError: async () => {},
@@ -825,8 +998,7 @@ describe('@deltic/process-queue ConcurrentProcessQueue', () => {
         expect(processed).toEqual(['after-purge']);
     });
 
-    // see .claude-work/issues/process-queue-stop-does-not-track-in-flight-work.md
-    it.fails('resolves stop() after the queue stopped itself because a task failed', async () => {
+    test('resolves stop() after the queue stopped itself because a task failed', async () => {
         const processor = new GatedProcessor<string>();
         const processQueue = new ConcurrentProcessQueue<string>({
             maxProcessing: 2,
@@ -846,8 +1018,7 @@ describe('@deltic/process-queue ConcurrentProcessQueue', () => {
         expect(stopped).toBe(true);
     });
 
-    // see .claude-work/issues/process-queue-stop-does-not-track-in-flight-work.md
-    it.fails('resolves stop() when the error handler awaits it while another task is in flight', async () => {
+    test('resolves stop() when the error handler awaits it while another task is in flight', async () => {
         const processor = new GatedProcessor<string>();
         let stopped = false;
         const processQueue = new ConcurrentProcessQueue<string>({
@@ -868,8 +1039,28 @@ describe('@deltic/process-queue ConcurrentProcessQueue', () => {
         expect(stopped).toBe(true);
     });
 
-    // see .claude-work/issues/process-queue-on-stop-is-not-called-consistently.md
-    it.fails('calls the onStop hook when the queue is stopped', async () => {
+    test('resolves stop() when several error handlers await it at the same time', async () => {
+        const processor = new GatedProcessor<string>();
+        const stopped: string[] = [];
+        const processQueue = new ConcurrentProcessQueue<string>({
+            maxProcessing: 2,
+            onError: async ({queue, task}) => {
+                await queue.stop();
+                stopped.push(task);
+            },
+            processor: processor.process,
+        });
+        processQueue.push('first').catch(() => {});
+        processQueue.push('second').catch(() => {});
+        await flushTicks();
+        processor.fail('first', new Error('cannot process this task'));
+        processor.fail('second', new Error('cannot process this task'));
+        await flushTicks(20);
+        expect(stopped.toSorted()).toEqual(['first', 'second']);
+        await expect(processQueue.stop()).resolves.toBeUndefined();
+    });
+
+    test('calls the onStop hook when the queue is stopped', async () => {
         let stopped = 0;
         const processQueue = new ConcurrentProcessQueue<string>({
             onError: async () => {},
@@ -1025,8 +1216,7 @@ describe('@deltic/process-queue PartitionedProcessQueue', () => {
         expect(processor.settled).toEqual(['negative']);
     });
 
-    // see .claude-work/issues/process-queue-on-stop-is-not-called-consistently.md
-    it.fails('calls the onStop hook when the queue is purged', async () => {
+    test('calls the onStop hook when the queue is purged', async () => {
         let stopped = 0;
         const processQueue = partitionedQueue(new GatedProcessor<string>(), 2, () => {
             stopped++;
