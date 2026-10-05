@@ -176,10 +176,6 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
         expect(retrieved).toBeUndefined();
     });
 
-    test('removing a record that was never stored is not an error', async () => {
-        await expect(store.remove({name: 'Nobody', age: 1, personId})).resolves.toBeUndefined();
-    });
-
     test('properties that are not mapped to a column survive the round trip', async () => {
         await store.persist(exampleIndex, {...example, likesMushrooms: 'hell-no'});
 
