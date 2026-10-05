@@ -1105,8 +1105,7 @@ describe('@deltic/dependency-injection', () => {
             expect(segments).toEqual(['lazy-1']);
         });
 
-        // see .claude-work/issues/dependency-injection-container-remains-usable-after-cleanup.md
-        it.fails('does not shut a registered instance down twice when it is resolved after a cleanup', async () => {
+        test('refuses to resolve a registered instance after its cleanup ran, instead of shutting it down twice', async () => {
             const instanceKey = container.registerInstance('broker', {
                 instance: new Dependency('broker'),
                 cleanup: trackCleanup,
@@ -1114,11 +1113,22 @@ describe('@deltic/dependency-injection', () => {
 
             await container.cleanup();
 
-            container.resolve(instanceKey);
+            expect(() => container.resolve(instanceKey)).toThrow(
+                'The instance registered as "broker" was cleaned up and cannot be resolved again.',
+            );
 
             await container.cleanup();
 
             expect(segments).toEqual(['broker']);
+        });
+
+        test('a registered instance without a cleanup can still be resolved after a cleanup', async () => {
+            const logger = new Dependency('logger');
+            const loggerKey = container.registerInstance('logger', {instance: logger});
+
+            await container.cleanup();
+
+            expect(container.resolve(loggerKey)).toBe(logger);
         });
 
         // see .claude-work/issues/dependency-injection-concurrent-cleanup-runs-every-hook-twice.md

@@ -315,7 +315,18 @@ export class DependencyContainer {
         this.cache.set(key, instance);
         this.definitions.set(key, {
             ...definition,
-            factory: () => instance,
+            // Only a cleanup drops the instance from the cache. One without a cleanup was left
+            // alone and is simply cached again. One with a cleanup was shut down, and the container
+            // did not construct it, so it cannot construct a new one either: handing out the old one
+            // would also register its cleanup to run a second time.
+            factory:
+                cleanup === undefined
+                    ? () => instance
+                    : () => {
+                          throw new Error(
+                              `The instance registered as "${key}" was cleaned up and cannot be resolved again.`,
+                          );
+                      },
         });
 
         if (cleanup) {
