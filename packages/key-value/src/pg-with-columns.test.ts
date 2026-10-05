@@ -14,7 +14,7 @@ type ExampleObject = {
     age: number;
     personId: PersonId;
     likedLasagna: boolean;
-    likesMushrooms: boolean;
+    likesMushrooms: 'no' | 'hell-no';
     anotherUuid: string;
     myFriend: {email: string};
 };
@@ -104,7 +104,7 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
         age: 36,
         personId,
         likedLasagna: false,
-        likesMushrooms: false,
+        likesMushrooms: 'no',
         anotherUuid: uuid.v7(),
         myFriend: {email: 'marge@sharknado.com'},
     };
@@ -139,17 +139,17 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
             age: 36,
             personId,
             likedLasagna: false,
-            likesMushrooms: false,
+            likesMushrooms: 'no',
             anotherUuid,
             myFriend: {email: 'marge@sharknado.com'},
         };
 
-        const newExample = {
+        const newExample: ExampleObject = {
             name: 'Frank',
             age: 36,
             personId,
             likedLasagna: true,
-            likesMushrooms: true,
+            likesMushrooms: 'hell-no',
             anotherUuid,
             myFriend: {email: 'homer@sharknado.com'},
         };
@@ -181,11 +181,11 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
     });
 
     test('properties that are not mapped to a column survive the round trip', async () => {
-        await store.persist(exampleIndex, {...example, likesMushrooms: true});
+        await store.persist(exampleIndex, {...example, likesMushrooms: 'hell-no'});
 
         const retrieved = await store.retrieve(exampleIndex);
 
-        expect(retrieved?.likesMushrooms).toBe(true);
+        expect(retrieved?.likesMushrooms).toBe('hell-no');
     });
 
     test('a value with sql metacharacters is stored as a literal value', async () => {
