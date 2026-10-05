@@ -1,5 +1,6 @@
 import {type ConfirmChannel, type Message as AMQPMessage} from 'amqplib';
 import crc32 from 'crc/crc32';
+import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {StandardError, isUnrecoverableError} from '@deltic/error-standard';
 import {StaticMutexUsingMemory} from '@deltic/mutex/static-memory';
@@ -36,18 +37,6 @@ class ChannelClosedWhileAttaching extends StandardError {
             {queueNames: queueNames.join(', ')},
         );
 }
-
-type MessageToProcess<Stream extends StreamDefinition> = {
-    amqp: AMQPMessage;
-    /**
-     * Delivery tags number the deliveries of one channel, so the tag on `amqp` only means anything
-     * to the channel that delivered it. A reconnect can complete while a message is still being
-     * processed; settling it on the channel that replaced it would settle whichever delivery that
-     * number happens to name there, which is some other message.
-     */
-    channel: ConfirmChannel;
-    message: AnyMessageFrom<Stream>;
-};
 
 /**
  * Reads the message a delivery carries, or nothing when its body is not one: not JSON at all, or
@@ -87,6 +76,32 @@ function rejectWithoutRequeue(channel: ConfirmChannel, amqp: AMQPMessage): void 
     }
 }
 
+/**
+ * Tells one message from another across its redeliveries: by `event_id` when the producer set one,
+ * by its body otherwise, which every redelivery carries unchanged.
+ */
+function deliveryKeyOf<Stream extends StreamDefinition>(task: MessageToProcess<Stream>): string {
+    const eventId = task.message.headers['event_id'];
+
+    if ((typeof eventId === 'string' && eventId !== '') || typeof eventId === 'number') {
+        return String(eventId);
+    }
+
+    return `body:${createHash('sha256').update(task.amqp.content).digest('base64')}`;
+}
+
+type MessageToProcess<Stream extends StreamDefinition> = {
+    amqp: AMQPMessage;
+    /**
+     * Delivery tags number the deliveries of one channel, so the tag on `amqp` only means anything
+     * to the channel that delivered it. A reconnect can complete while a message is still being
+     * processed; settling it on the channel that replaced it would settle whichever delivery that
+     * number happens to name there, which is some other message.
+     */
+    channel: ConfirmChannel;
+    message: AnyMessageFrom<Stream>;
+};
+
 export class AMQPMessageRelay<Stream extends StreamDefinition> {
     private shuttingDown: boolean = false;
     private readonly startupIsolation = new StaticMutexUsingMemory();
@@ -115,6 +130,11 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
                 processor: async (task) => {
                     await this.consumer.consume(task.message);
 
+                    // Only a redelivery can have failed before.
+                    if (task.amqp.fields.redelivered) {
+                        await this.forgetDeliveryAttempts(task);
+                    }
+
                     if (task.channel !== this.channel) {
                         // The broker redelivers anything left unsettled on the channel that is gone.
                         return;
@@ -124,10 +144,12 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
                     await task.channel.waitForConfirms();
                 },
                 onError: async (context) => {
-                    const numberOfAttempts = await this.deliveryAttempts.increment(
-                        String(context.task.message.headers['event_id']),
-                    );
+                    const numberOfAttempts = await this.deliveryAttempts.increment(deliveryKeyOf(context.task));
                     const shouldRedeliver = maxDeliveryAttempts > numberOfAttempts;
+
+                    if (!shouldRedeliver) {
+                        await this.forgetDeliveryAttempts(context.task);
+                    }
 
                     context.skipCurrentTask();
 
@@ -285,6 +307,20 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
             attached = true;
         } finally {
             await this.startupIsolation.unlock();
+        }
+    }
+
+    /**
+     * A count is only needed while a message can still come back. Forgetting it once the message was
+     * handled or dead-lettered bounds the counter, and gives a message that is put back on the queue
+     * later a fresh budget. A count kept for longer than needed is harmless, so failing to forget it
+     * does not fail the delivery.
+     */
+    private async forgetDeliveryAttempts(task: MessageToProcess<Stream>): Promise<void> {
+        try {
+            await this.deliveryAttempts.forget?.(deliveryKeyOf(task));
+        } catch {
+            // The count outlives the message, nothing more.
         }
     }
 

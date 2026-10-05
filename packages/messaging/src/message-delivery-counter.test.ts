@@ -26,4 +26,14 @@ describe('MessageDeliveryCounterUsingMemory', () => {
         expect(await counter.increment('a')).toEqual(3);
         expect(await counter.increment('b')).toEqual(2);
     });
+
+    test('a forgotten key starts counting over', async () => {
+        const counter = new MessageDeliveryCounterUsingMemory<string>();
+
+        await counter.increment('a');
+        await counter.increment('a');
+        await counter.forget('a');
+
+        expect(await counter.increment('a')).toEqual(1);
+    });
 });
