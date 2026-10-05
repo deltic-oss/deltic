@@ -35,7 +35,8 @@
   "license": "ISC",
   "packageManager": "pnpm@10.12.4",
   "dependencies": {
-    "@deltic/branded": "workspace:^"
+    "@deltic/branded": "workspace:^",
+    "@deltic/error-standard": "workspace:^"
   },
   "peerDependencies": {
     "@deltic/branded": "workspace:^",

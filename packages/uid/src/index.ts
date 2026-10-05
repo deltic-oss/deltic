@@ -1,4 +1,5 @@
 import type {Branded} from '@deltic/branded';
+import {StandardError} from '@deltic/error-standard';
 
 export type PrefixedId<Prefix extends string> = Branded<`${Prefix}_${string}`, Prefix>;
 
@@ -44,16 +45,23 @@ export class NoIdConversion<Type extends string | number> implements IdConversio
     }
 }
 
+export class UnexpectedIdPrefix extends StandardError {
+    static forExpectedPrefix = (expectedPrefix: string) =>
+        new UnexpectedIdPrefix(`Expected an id prefixed with "${expectedPrefix}_".`, 'uid.unexpected_id_prefix', {
+            expectedPrefix,
+        });
+}
+
 export class PrefixedBrandedIdConversion<
     Prefix extends string,
     DatabaseType extends string | number,
 > implements IdConversion<PrefixedId<Prefix>, DatabaseType> {
-    private readonly prefixLength: number;
+    private readonly fullPrefix: string;
     constructor(
         private readonly prefix: Prefix,
         private readonly conversion: IdConversion<string, DatabaseType>,
     ) {
-        this.prefixLength = prefix.length + 1;
+        this.fullPrefix = `${prefix}_`;
         this.fromDatabase.bind(this);
         this.toDatabase.bind(this);
     }
@@ -63,7 +71,12 @@ export class PrefixedBrandedIdConversion<
     }
 
     toDatabase(from: PrefixedId<Prefix>): DatabaseType {
-        return this.conversion.toDatabase(from.substring(this.prefixLength));
+        // The brand only exists at compile time, so an id cast to the wrong type can arrive here
+        if (!from.startsWith(this.fullPrefix)) {
+            throw UnexpectedIdPrefix.forExpectedPrefix(this.prefix);
+        }
+
+        return this.conversion.toDatabase(from.substring(this.fullPrefix.length));
     }
 }
 

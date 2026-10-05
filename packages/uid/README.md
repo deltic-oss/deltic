@@ -97,6 +97,9 @@ conversion.toDatabase(userId);         // '0193a5f8-...' (prefix stripped)
 conversion.fromDatabase('0193a5f8-...'); // 'user_0193a5f8-...' (prefix added)
 ```
 
+`toDatabase` throws `UnexpectedIdPrefix` for an id that does not start with `{prefix}_`, such as a string
+cast to the wrong id type, rather than storing it under a mangled key.
+
 ### ULID to UUID Conversion
 
 ```typescript
@@ -126,6 +129,7 @@ conversion.fromDatabase(uuid);  // ULID string
 | `PrefixedBrandedIdGenerator<Prefix>` | Generates prefixed branded IDs using a factory function |
 | `PrefixedBrandedIdConversion<Prefix, DatabaseType>` | Converts between prefixed IDs and database representation |
 | `NoIdConversion<Type>` | Pass-through conversion (no transformation) |
+| `UnexpectedIdPrefix` | Thrown by `PrefixedBrandedIdConversion.toDatabase` for an id without the configured prefix |
 
 ## License
 
