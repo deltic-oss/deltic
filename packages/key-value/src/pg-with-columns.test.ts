@@ -318,8 +318,7 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
         expect(rows.map(row => row.user_id)).toEqual(['user-1']);
     });
 
-    // see .claude-work/issues/key-value-with-columns-uses-column-name-as-lookup-value.md
-    it.fails('retrieves a record whose identity column is declared without a value conversion', async () => {
+    test('retrieves a record whose identity column is declared without a value conversion', async () => {
         const store = makeRenamedColumnStore();
         const user: User = {userId: 'user-1', nickname: 'Alice'};
         await store.persist({userId: 'user-1'}, user);
@@ -327,8 +326,7 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
         expect(await store.retrieve({userId: 'user-1'})).toEqual(user);
     });
 
-    // see .claude-work/issues/key-value-with-columns-uses-column-name-as-lookup-value.md
-    it.fails('removes a record whose identity column is declared without a value conversion', async () => {
+    test('removes a record whose identity column is declared without a value conversion', async () => {
         const store = makeRenamedColumnStore();
         await store.persist({userId: 'user-1'}, {userId: 'user-1', nickname: 'Alice'});
 
