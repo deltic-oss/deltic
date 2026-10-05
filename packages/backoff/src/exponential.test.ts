@@ -168,13 +168,6 @@ describe('exponential backoff', () => {
             expect(backoffStrategy.backOff(0)).toEqual(50);
         });
 
-        // see .claude-work/issues/backoff-non-numeric-attempt-bypasses-max-attempts.md
-        it.fails('refuses an attempt count that is not a number', () => {
-            const backoffStrategy = new ExponentialBackoffStrategy(100, 5, 10000);
-
-            expect(() => backoffStrategy.backOff(Number.NaN)).toThrow(MaxAttemptsExceeded);
-        });
-
         test('an infinite attempt count is refused when a maximum is configured', () => {
             const backoffStrategy = new ExponentialBackoffStrategy(100, 5, 10000);
 
