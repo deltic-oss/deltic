@@ -151,5 +151,18 @@ function describeError(error: unknown, remainingDepth: number): string {
         return `${error.name}${code}`;
     }
 
-    return String(error);
+    return representationOf(error);
+}
+
+/**
+ * `String()` never throws for primitives, symbols included, but it does for an object without a
+ * prototype and for one whose `toString` or `Symbol.toPrimitive` throws. Message extraction runs
+ * while a failure is being reported, so a second failure here would replace the first one.
+ */
+function representationOf(value: unknown): string {
+    try {
+        return String(value);
+    } catch {
+        return '[unprintable object]';
+    }
 }
