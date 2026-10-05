@@ -25,6 +25,15 @@ export type AMQPMessageRelayOptions = {
  */
 const restartInterval = 1000;
 
+class AlreadyStarted extends StandardError {
+    static create = () =>
+        new AlreadyStarted(
+            'AMQP message relay was already started',
+            'amqp.relay_already_started',
+            {},
+        );
+}
+
 /**
  * Only ever thrown into the relay's own restart handling, which retries it like any other
  * failure to start consuming.
@@ -170,7 +179,7 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
         this.shuttingDown = false;
 
         if (this.waiter) {
-            throw new Error('Already started');
+            throw AlreadyStarted.create();
         }
 
         this.waiter = Promise.withResolvers<void>();
@@ -199,7 +208,7 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
              * process, instead of being retried for as long as the deployment lives.
              */
             if (isUnrecoverableError(error)) {
-                this.waiter?.reject(error);
+                this.endRun()?.reject(error);
 
                 return;
             }
@@ -396,6 +405,17 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
         await this.processQueue.stop();
         await this.releaseCurrentChannel();
 
-        this.waiter.resolve();
+        this.endRun()?.resolve();
+    }
+
+    /**
+     * Forgetting the waiter of a run that ended, whether it was stopped or gave up on the broker,
+     * is what lets `start()` begin the next one.
+     */
+    private endRun(): PromiseWithResolvers<void> | undefined {
+        const waiter = this.waiter;
+        this.waiter = undefined;
+
+        return waiter;
     }
 }

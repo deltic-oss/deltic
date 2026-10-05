@@ -200,6 +200,10 @@ function consumerThatCollects(collected: AnyMessageFrom<ExampleStream>[]): Messa
 
 const queueName = 'example_queue';
 
+class BrokerIsGone extends Error {
+    readonly isUnrecoverable = true as const;
+}
+
 describe('AMQPMessageRelay', () => {
     let pool: ObservableChannelPool;
     let relay: AMQPMessageRelay<ExampleStream> | undefined;
@@ -768,10 +772,8 @@ describe('AMQPMessageRelay', () => {
     /**
      * Relays are stopped and started again around deployments and when a supervising
      * process decides to pause consumption.
-     *
-     * see .claude-work/issues/messaging-amqp-relay-cannot-restart.md
      */
-    it.fails('it can be started again after it was stopped', async () => {
+    test('it can be started again after it was stopped', async () => {
         relay = new AMQPMessageRelay<ExampleStream>(
             pool.asChannelPool(),
             consumerThatCollects([]),
@@ -787,6 +789,38 @@ describe('AMQPMessageRelay', () => {
         ]);
 
         expect(outcome).toEqual('running');
+    });
+
+    test('a relay that gave up on the broker can be started again', async () => {
+        const consumed: AnyMessageFrom<ExampleStream>[] = [];
+        pool.failNextRequest(new BrokerIsGone('the broker is not coming back'));
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            consumerThatCollects(consumed),
+            {queueNames: [queueName]},
+        );
+        await expect(relay.start()).rejects.toThrow(BrokerIsGone);
+
+        void relay.start();
+        const channel = await waitForChannel(pool);
+        (await channel.deliveryTo(queueName))(
+            amqpDeliveryFor(createMessage<ExampleStream>('example', {value: 'one'})),
+        );
+        await channel.outcomes(1);
+
+        expect(consumed.map(m => m.payload)).toEqual([{value: 'one'}]);
+    });
+
+    test('starting a relay that is running is refused', async () => {
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            consumerThatCollects([]),
+            {queueNames: [queueName]},
+        );
+        void relay.start();
+        await (await waitForChannel(pool)).deliveryTo(queueName);
+
+        await expect(relay.start()).rejects.toThrow('AMQP message relay was already started');
     });
 });
 
