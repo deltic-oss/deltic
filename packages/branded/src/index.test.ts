@@ -1,5 +1,3 @@
-import {readFileSync} from 'node:fs';
-import ts from 'typescript';
 import type {Branded} from './index.js';
 import * as brandedModule from './index.js';
 
@@ -290,70 +288,31 @@ describe('branded', () => {
     });
 
     describe('layering a second brand onto an already branded type', () => {
-        // see .claude-work/issues/branded-nested-brands-collapse-to-never.md
-        it.fails('yields an inhabitable type when a refinement brand is layered on', () => {
-            expect(typeErrorsIn(`
-                type UserId = Branded<string, 'UserId'>;
-                type Verified<T> = Branded<T, 'Verified'>;
-                type IsNever<T> = [T] extends [never] ? true : false;
+        type Verified<T> = Branded<T, 'Verified'>;
+        type IsNever<T> = [T] extends [never] ? true : false;
 
-                // Refuses to compile for as long as Verified<UserId> collapses to never.
-                const layeredBrandIsInhabitable: IsNever<Verified<UserId>> = false;
-            `)).toEqual([]);
+        test('yields an inhabitable type when a refinement brand is layered on', () => {
+            const layeredBrandIsNever: IsNever<Verified<UserId>> = false;
+            const verified = 'user_1' as Verified<UserId>;
+            const userId: UserId = verified;
+
+            expect(layeredBrandIsNever).toBe(false);
+            expect(userId).toBe('user_1');
         });
 
-        // see .claude-work/issues/branded-nested-brands-collapse-to-never.md
-        it.fails('keeps a doubly branded value out of an unrelated brand', () => {
-            const errors = typeErrorsIn(`
-                type UserId = Branded<string, 'UserId'>;
-                type OrderId = Branded<string, 'OrderId'>;
-                type Verified<T> = Branded<T, 'Verified'>;
+        test('keeps a doubly branded value out of an unrelated brand', () => {
+            const verified = 'user_1' as Verified<UserId>;
+            // @ts-expect-error a verified UserId is still not an OrderId
+            const orderId: OrderId = verified;
 
-                declare const verified: Verified<UserId>;
-                const orderId: OrderId = verified;
-            `);
+            expect(orderId).toBe('user_1');
+        });
 
-            expect(errors.length).toBeGreaterThan(0);
+        test('refuses a value that carries only one of the layered brands', () => {
+            // @ts-expect-error a UserId that was never verified is not a verified UserId
+            const verified: Verified<UserId> = 'user_1' as UserId;
+
+            expect(verified).toBe('user_1');
         });
     });
 });
-
-/**
- * Type-checks a snippet against the real `Branded` definition and returns the type errors
- * it produces. The repository-wide `tsc` run cannot express "this should be an error but is
- * not yet", which is exactly what the `it.fails` assertions above need.
- */
-function typeErrorsIn(scenario: string): string[] {
-    const compilerOptions: ts.CompilerOptions = {
-        strict: true,
-        noEmit: true,
-        skipLibCheck: true,
-        target: ts.ScriptTarget.ES2024,
-        module: ts.ModuleKind.ESNext,
-        moduleResolution: ts.ModuleResolutionKind.Bundler,
-    };
-    const sources = new Map<string, string>([
-        ['/branded.ts', readFileSync(new URL('index.ts', import.meta.url), 'utf8')],
-        ['/scenario.ts', `import type {Branded} from './branded';\n${scenario}`],
-    ]);
-    const host = ts.createCompilerHost(compilerOptions, true);
-    const readHostFile = host.readFile.bind(host);
-    const readHostSourceFile = host.getSourceFile.bind(host);
-    const hostFileExists = host.fileExists.bind(host);
-
-    host.fileExists = fileName => sources.has(fileName) || hostFileExists(fileName);
-    host.readFile = fileName => sources.get(fileName) ?? readHostFile(fileName);
-    host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-        const source = sources.get(fileName);
-
-        return source === undefined
-            ? readHostSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile)
-            : ts.createSourceFile(fileName, source, languageVersion);
-    };
-
-    const program = ts.createProgram(['/scenario.ts'], compilerOptions, host);
-
-    return program
-        .getSemanticDiagnostics(program.getSourceFile('/scenario.ts'))
-        .map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '));
-}
