@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import type {ConfirmChannel} from 'amqplib';
 import {WaitGroup} from '@deltic/wait-group';
 import {createMessageConsumer} from '../helpers.js';
@@ -11,18 +12,41 @@ const amqpUrl = 'amqp://admin:admin@localhost:35671';
 const managementUrl = 'http://localhost:35672/api';
 const managementAuth = 'Basic ' + Buffer.from('admin:admin').toString('base64');
 
-async function closeAllRabbitMQConnections(): Promise<void> {
-    const response = await fetch(`${managementUrl}/connections`, {
-        headers: {Authorization: managementAuth},
-    });
-    const connections: {name: string}[] = await response.json() as any;
+/**
+ * A virtual host and a user of its own, so a test can have the broker close its connections without
+ * closing those of anything else using the same broker at the same time.
+ */
+interface IsolatedBrokerAccess {
+    readonly amqpUrl: string;
+    closeConnections(): Promise<void>;
+    remove(): Promise<void>;
+}
 
-    for (const connection of connections) {
-        await fetch(`${managementUrl}/connections/${encodeURIComponent(connection.name)}`, {
-            method: 'DELETE',
-            headers: {Authorization: managementAuth},
-        });
-    }
+async function createIsolatedBrokerAccess(): Promise<IsolatedBrokerAccess> {
+    const name = `deltic_e2e_${randomUUID()}`;
+    const headers = {Authorization: managementAuth, 'content-type': 'application/json'};
+    await fetch(`${managementUrl}/vhosts/${name}`, {method: 'PUT', headers});
+    await fetch(`${managementUrl}/users/${name}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({password: name, tags: ''}),
+    });
+    await fetch(`${managementUrl}/permissions/${name}/${name}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({configure: '.*', write: '.*', read: '.*'}),
+    });
+
+    return {
+        amqpUrl: `amqp://${name}:${name}@localhost:35671/${name}`,
+        async closeConnections() {
+            await fetch(`${managementUrl}/connections/username/${name}`, {method: 'DELETE', headers});
+        },
+        async remove() {
+            await fetch(`${managementUrl}/vhosts/${name}`, {method: 'DELETE', headers});
+            await fetch(`${managementUrl}/users/${name}`, {method: 'DELETE', headers});
+        },
+    };
 }
 
 /**
@@ -167,8 +191,9 @@ describe('E2E tests for AMQP dispatcher and relay', () => {
     test('relay recovers after server-side connection close', async () => {
         const reconnectExchange = 'deltic_e2e_reconnect_test';
         const reconnectQueue = 'deltic_e2e_reconnect_test_queue';
+        const broker = await createIsolatedBrokerAccess();
 
-        const connectionProvider = new AMQPConnectionProvider(amqpUrl);
+        const connectionProvider = new AMQPConnectionProvider(broker.amqpUrl);
         const channelPool = new AMQPChannelPool(connectionProvider);
 
         // Set up a dedicated exchange and queue for this test
@@ -207,8 +232,8 @@ describe('E2E tests for AMQP dispatcher and relay', () => {
         expect(consumedMessages).toHaveLength(1);
         expect(consumedMessages[0].payload.name).toEqual('BeforeDisconnect');
 
-        // Force-close all connections on the server side via the management API
-        await closeAllRabbitMQConnections();
+        // Have the broker close the relay's connection, through the management API
+        await broker.closeConnections();
 
         // Give the relay time to detect the disconnect and reconnect
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -227,6 +252,7 @@ describe('E2E tests for AMQP dispatcher and relay', () => {
             await relay.stop();
             await channelPool.close();
             await connectionProvider.close();
+            await broker.remove();
         }
 
         expect(consumedMessages).toHaveLength(2);
