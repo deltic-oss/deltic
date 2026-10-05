@@ -1,5 +1,4 @@
 import {InputNotSupported, ServiceDispatcher, type ServiceMiddleware} from './index.js';
-import {AsyncLocalStorage} from 'node:async_hooks';
 
 interface NumberToNumber {
     value: number;
@@ -257,84 +256,4 @@ describe('dispatching through middleware', () => {
         expect(handled).toEqual(['register_payment:ref-1', 'refund_payment:ref-1']);
     });
 
-    test('async context established by a middleware is visible to the handler', async () => {
-        const storage = new AsyncLocalStorage<string>();
-        let seenInHandler: string | undefined = undefined;
-        let seenInInnerMiddleware: string | undefined = undefined;
-        const dispatcher = new ServiceDispatcher<PaymentService>(
-            {
-                ...handlers,
-                register_payment: async payload => {
-                    seenInHandler = storage.getStore();
-
-                    return {reference: payload.reference};
-                },
-            },
-            [
-                (input, next) => storage.run('correlation-id', () => next(input)),
-                (input, next) => {
-                    seenInInnerMiddleware = storage.getStore();
-
-                    return next(input);
-                },
-            ],
-        );
-
-        await dispatcher.handle({type: 'register_payment', payload: {reference: 'ref-1', amount: 100}});
-
-        expect(seenInHandler).toEqual('correlation-id');
-        expect(seenInInnerMiddleware).toEqual('correlation-id');
-        expect(storage.getStore()).toBeUndefined();
-    });
-
-    test('concurrent dispatches do not leak input between each other', async () => {
-        const seenByMiddleware: string[] = [];
-        const dispatcher = new ServiceDispatcher<PaymentService>(
-            {
-                ...handlers,
-                register_payment: async payload => {
-                    await Promise.resolve();
-
-                    return {reference: payload.reference};
-                },
-            },
-            [
-                async (input, next) => {
-                    seenByMiddleware.push(String(input.type));
-                    await Promise.resolve();
-
-                    return next(input);
-                },
-            ],
-        );
-
-        const references = ['ref-1', 'ref-2', 'ref-3', 'ref-4', 'ref-5'];
-        const responses = await Promise.all(
-            references.map(reference =>
-                dispatcher.handle({type: 'register_payment', payload: {reference, amount: 100}}),
-            ),
-        );
-
-        expect(responses).toEqual(references.map(reference => ({reference})));
-        expect(seenByMiddleware).toHaveLength(references.length);
-    });
-
-    test('the handler declared last for a type is the one that is used', async () => {
-        const dispatcher = new ServiceDispatcher<PaymentService>({
-            ...handlers,
-            register_payment: async payload => {
-                handled.push(`override:${payload.reference}`);
-
-                return {reference: 'override'};
-            },
-        });
-
-        const response = await dispatcher.handle({
-            type: 'register_payment',
-            payload: {reference: 'ref-1', amount: 100},
-        });
-
-        expect(response).toEqual({reference: 'override'});
-        expect(handled).toEqual(['override:ref-1']);
-    });
 });

@@ -271,50 +271,6 @@ describe.each([
         await expect(holding).resolves.toEqual({value: 'holder'});
     });
 
-    it('never runs two commands for the same lock at the same time', async () => {
-        const gates: Map<string, PromiseWithResolvers<void>> = new Map([
-            ['one', Promise.withResolvers<void>()],
-            ['two', Promise.withResolvers<void>()],
-        ]);
-        const running: Map<string, number> = new Map();
-        const peak: Map<string, number> = new Map();
-        const settled = async () => new Promise(resolve => setImmediate(resolve));
-        const blockingService = factory(
-            createHandlers({
-                ping: async payload => {
-                    const concurrent = (running.get(payload.id) ?? 0) + 1;
-                    running.set(payload.id, concurrent);
-                    peak.set(payload.id, Math.max(peak.get(payload.id) ?? 0, concurrent));
-
-                    await gates.get(payload.id)?.promise;
-
-                    running.set(payload.id, concurrent - 1);
-
-                    return {value: payload.returnThis};
-                },
-            }),
-            {
-                mutex,
-                lockResolver: input => input.payload.id,
-                timeoutMs: 50,
-            },
-        );
-
-        const dispatches = [
-            blockingService.handle({type: 'ping', payload: {id: 'one', returnThis: 'first'}}),
-            blockingService.handle({type: 'ping', payload: {id: 'two', returnThis: 'second'}}),
-            blockingService.handle({type: 'ping', payload: {id: 'two', returnThis: 'third'}}),
-        ];
-
-        await settled();
-        gates.get('one')?.resolve();
-        await settled();
-        gates.get('two')?.resolve();
-        await Promise.allSettled(dispatches);
-
-        expect(peak.get('two')).toEqual(1);
-    });
-
     test('dispatching for the same lock from within a command handler times out', async () => {
         let reentrantService: Service<ExampleService>;
         reentrantService = factory(

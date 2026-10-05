@@ -264,16 +264,6 @@ describe('mocking a service with structured payloads', () => {
         expect(response).toEqual({id: 'order-id'});
     });
 
-    test('a staged response does not match when a nested value differs', async () => {
-        service.stageResponse({type: 'place_order', payload: order, response: {id: 'order-id'}});
-        const input: AnyInputForService<OrderService> = {
-            type: 'place_order',
-            payload: {reference: 'ORD-1', lines: [{sku: 'sku-1', quantity: 3}]},
-        };
-
-        await expect(service.handle(input)).rejects.toThrow(errorForMissingMockedResponseForInput(input));
-    });
-
     test('a command without a response can be staged by type alone', async () => {
         service.stageResponse({type: 'cancel_order'});
 

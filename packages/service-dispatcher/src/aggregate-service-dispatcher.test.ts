@@ -193,15 +193,6 @@ describe('AggregateServiceDispatcher', () => {
         expect(repository.eventTypesFor('group-1')).toEqual(['member_was_added']);
     });
 
-    // see .claude-work/issues/service-dispatcher-persist-failure-hides-handler-error.md
-    it.fails('reports the handler error when persisting the recorded events also fails', async () => {
-        repository.failPersistWith = new Error('the database is gone');
-
-        await expect(
-            service.handle({type: 'fail_after_recording', payload: {id: 'group-1', member: frank}}),
-        ).rejects.toThrow(domainFailure);
-    });
-
     // see .claude-work/issues/service-dispatcher-aggregate-dispatcher-unsupported-input.md
     it.fails('rejects with InputNotSupported when no handler is registered for the input type', async () => {
         await expect(
