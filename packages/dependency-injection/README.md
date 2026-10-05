@@ -87,6 +87,12 @@ The graph is then walked from consumers to dependencies. Everything that nothing
 cleaned up first, concurrently; each following step waits for its consumers to finish. A dependency
 therefore stays usable for as long as anything that may need it is still shutting down.
 
+A cleanup hook that throws or rejects does not stop the cleanup: its siblings still run, and so do
+the hooks of everything beneath it. Once the whole graph was walked, `cleanup()` rejects with a
+`CleanupFailed`, an `AggregateError` whose `errors` are what the hooks threw and whose `failures`
+pair each of them with its service. Every hook ran once, so a later `cleanup()` only cleans up what
+was resolved since.
+
 Calling `cleanup()` while a cleanup is already running joins the running one: every hook runs once,
 and every caller settles when that shutdown has finished. Shutdown is usually triggered from more
 than one place, so the triggers can share one handler without guarding it themselves:
