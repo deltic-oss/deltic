@@ -110,6 +110,13 @@ process.on('SIGINT', shutdown);
 
 Once a cleanup has finished, a later call starts a new one for whatever was resolved since.
 
+A service resolved while a cleanup is running, by a request that is still being handled for
+example, is cleaned up by that same cleanup: each step is taken from the graph as it is at that
+moment, so the late service is cleaned up before whatever it depends on that has not been cleaned up
+yet. What has already been cleaned up cannot wait for it, so drain the work that still needs its
+dependencies first, typically by cleaning up the component that accepts the work (a server, a
+consumer).
+
 A cycle that cannot be resolved this way throws, and nothing is cleaned up:
 
 ```

@@ -76,6 +76,13 @@ export class CleanupFailed extends AggregateError {
         );
 }
 
+function cleanupCycleDetected(keys: readonly string[], failures: readonly CleanupFailure[] = []): Error {
+    return new Error(
+        `Circular dependency detected in cleanup routine, could not shut down: ${keys.join(', ')}.`,
+        failures.length > 0 ? {cause: CleanupFailed.forFailures(failures)} : undefined,
+    );
+}
+
 declare const service: unique symbol;
 
 export type ServiceKey<Service> = string & {
@@ -143,10 +150,17 @@ export class DependencyContainer {
      * the whole graph was walked.
      */
     private async runCleanup(): Promise<void> {
-        const levels = this.computeShutdownLevels();
+        this.refuseUnorderableCleanup();
+
+        const reached = new Set<string>();
         const failures: CleanupFailure[] = [];
 
-        for (const level of levels) {
+        // Each level is taken from the graph as it is now rather than planned up front: a service
+        // resolved while the cleanup runs, by work still in flight, is cleaned up as well, before
+        // whatever it depends on that has not been cleaned up yet.
+        for (let level = this.nextCleanupLevel(reached); level.length > 0; level = this.nextCleanupLevel(reached)) {
+            level.forEach(key => reached.add(key));
+
             await Promise.all(
                 // `async`, so a hook that throws synchronously fails on its own instead of keeping
                 // the rest of its level from starting
@@ -166,9 +180,16 @@ export class DependencyContainer {
             );
         }
 
+        // Only services resolved during the cleanup can be left over, in a cycle among themselves
+        const unordered = Array.from(this.resolved.keys()).filter(key => !reached.has(key));
+
         this.cache.clear();
         this.resolved.clear();
         this.transparentDependencies.clear();
+
+        if (unordered.length > 0) {
+            throw cleanupCycleDetected(unordered, failures);
+        }
 
         if (failures.length > 0) {
             throw CleanupFailed.forFailures(failures);
@@ -176,55 +197,38 @@ export class DependencyContainer {
     }
 
     /**
-     * Computes cleanup levels using reverse topological sort.
-     * Services in the same level have no dependencies between them and can shut down concurrently.
-     * Levels are ordered from leaves (nothing depends on them) to roots (depends on nothing).
+     * The services that nothing still waiting for its cleanup depends on. They can be cleaned up
+     * concurrently, and before whatever they depend on.
      */
-    private computeShutdownLevels(): string[][] {
-        const dependencies = new Map<string, Set<string>>();
+    private nextCleanupLevel(cleanedUp: ReadonlySet<string>): string[] {
+        const remaining = Array.from(this.resolved.keys()).filter(key => !cleanedUp.has(key));
+        const stillNeeded = new Set<string>();
 
-        for (const [key, service] of this.resolved.entries()) {
-            for (const dependency of service.dependencies) {
-                if (!dependencies.has(dependency)) {
-                    dependencies.set(dependency, new Set());
-                }
-                dependencies.get(dependency)!.add(key);
+        for (const key of remaining) {
+            for (const dependency of this.resolved.get(key)!.dependencies) {
+                stillNeeded.add(dependency);
             }
         }
 
-        const levels: string[][] = [];
-        const processed = new Set<string>();
-        const resolvedKeys = Array.from(this.resolved.keys());
+        return remaining.filter(key => !stillNeeded.has(key));
+    }
 
-        while (processed.size < resolvedKeys.length) {
-            // Find services whose dependents have all been processed
-            const currentLevel = resolvedKeys.filter(key => {
-                if (processed.has(key)) {
-                    return false;
-                }
+    /**
+     * A graph with a cycle cannot be ordered. That is refused before anything is cleaned up, so the
+     * container is left as it was.
+     */
+    private refuseUnorderableCleanup(): void {
+        const ordered = new Set<string>();
 
-                const serviceDependents = dependencies.get(key) ?? new Set();
-
-                return processed.isSupersetOf(serviceDependents);
-            });
-
-            if (currentLevel.length === 0) {
-                break;
-            }
-
-            levels.push(currentLevel);
-            currentLevel.forEach(key => processed.add(key));
+        for (let level = this.nextCleanupLevel(ordered); level.length > 0; level = this.nextCleanupLevel(ordered)) {
+            level.forEach(key => ordered.add(key));
         }
 
-        if (processed.size < resolvedKeys.length) {
-            const missing = new Set(resolvedKeys).difference(processed);
+        const unordered = Array.from(this.resolved.keys()).filter(key => !ordered.has(key));
 
-            throw new Error(
-                `Circular dependency detected in cleanup routine, could not shut down: ${[...missing].join(', ')}.`,
-            );
+        if (unordered.length > 0) {
+            throw cleanupCycleDetected(unordered);
         }
-
-        return levels;
     }
 
     /**

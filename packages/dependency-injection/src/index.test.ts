@@ -1173,8 +1173,7 @@ describe('@deltic/dependency-injection', () => {
             expect(segments).toEqual(['pool-1']);
         });
 
-        // see .claude-work/issues/dependency-injection-services-resolved-during-cleanup-are-never-shut-down.md
-        it.fails('shuts down a service that was resolved while a cleanup was in progress', async () => {
+        test('shuts down a service that was resolved while a cleanup was in progress', async () => {
             const closed = Promise.withResolvers<void>();
             const relayKey = container.register('relay', {
                 factory: () => new Dependency('relay'),
@@ -1197,8 +1196,7 @@ describe('@deltic/dependency-injection', () => {
             expect(segments.toSorted()).toEqual(['pool-1', 'relay']);
         });
 
-        // see .claude-work/issues/dependency-injection-services-resolved-during-cleanup-are-never-shut-down.md
-        it.fails('shuts down an instance that was created while a cleanup was in progress', async () => {
+        test('shuts down an instance that was created while a cleanup was in progress', async () => {
             const closed = Promise.withResolvers<void>();
             const relayKey = container.register('relay', {
                 factory: () => new Dependency('relay'),
@@ -1222,6 +1220,32 @@ describe('@deltic/dependency-injection', () => {
             await container.cleanup();
 
             expect(segments.toSorted()).toEqual(['relay', 'worker']);
+        });
+
+        test('the running cleanup shuts down a late service before what that service depends on', async () => {
+            const closed = Promise.withResolvers<void>();
+            const relayKey = container.register('relay', {
+                factory: c => new Middle('relay', c.resolve(poolKey)),
+                cleanup: async instance => {
+                    trackCleanup(instance);
+                    await closed.promise;
+                },
+            });
+            const lateKey = container.register('late', {
+                factory: c => new Middle('late', c.resolve(poolKey)),
+                cleanup: trackCleanup,
+            });
+
+            container.resolve(relayKey);
+
+            const shutdown = container.cleanup();
+
+            container.resolve(lateKey);
+            closed.resolve();
+
+            await shutdown;
+
+            expect(segments).toEqual(['relay', 'late', 'pool-1']);
         });
     });
 
