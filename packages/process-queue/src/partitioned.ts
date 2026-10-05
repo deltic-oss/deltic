@@ -30,7 +30,12 @@ export class PartitionedProcessQueue<Task> implements ProcessQueue<Task> {
     }
 
     push(task: Task): Promise<Task> {
-        return this.queues.get(this.partitioner(task) % this.numberOfPartitions)!.push(task);
+        // `%` keeps the sign of the key; adding the number of partitions maps negative keys into range,
+        // while a non-negative key keeps the partition it always had.
+        const key = Math.trunc(this.partitioner(task));
+        const partition = ((key % this.numberOfPartitions) + this.numberOfPartitions) % this.numberOfPartitions;
+
+        return this.queues.get(partition)!.push(task);
     }
 
     start(): void {
