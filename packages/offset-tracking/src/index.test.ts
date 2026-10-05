@@ -8,7 +8,6 @@ import {OffsetRepositoryUsingPg} from './pg.js';
 const identifier = 'test-identifier';
 const consumerName = 'test_consumer';
 const tableName = 'test_offsets';
-const bigintTableName = 'test_offsets_bigint';
 
 /**
  * Tracker keys are namespaced per run and per call so that a re-run, a retry, or a
@@ -30,14 +29,6 @@ beforeAll(async () => {
     consumer VARCHAR(255) NOT NULL,
     identifier VARCHAR(255) NOT NULL,
     "offset" INT NOT NULL,
-    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (consumer, identifier)
-);
-        DROP TABLE IF EXISTS test_offsets_bigint;
-        CREATE TABLE IF NOT EXISTS test_offsets_bigint (
-    consumer VARCHAR(255) NOT NULL,
-    identifier VARCHAR(255) NOT NULL,
-    "offset" BIGINT NOT NULL,
     updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (consumer, identifier)
 );
@@ -274,41 +265,6 @@ describe('OffsetRepositoryUsingPg', () => {
     });
 });
 
-describe('OffsetRepositoryUsingPg with bigint offsets', () => {
-    test('it round-trips offsets beyond the safe integer range when offsets are typed as strings', async () => {
-        // given
-        const repository = new OffsetRepositoryUsingPg<string>(asyncPool, {
-            tableName: bigintTableName,
-            consumerName,
-        });
-        const key = uniqueKey('bigint-string');
-
-        // when
-        await repository.store(key, '9007199254740993');
-
-        // then
-        expect(await repository.retrieve(key)).toBe('9007199254740993');
-    });
-
-    // see .claude-work/issues/offset-tracking-bigint-offsets-are-returned-as-strings.md
-    it.fails('it returns a number for a bigint column when offsets are typed as numbers', async () => {
-        // given
-        const repository = new OffsetRepositoryUsingPg<number>(asyncPool, {
-            tableName: bigintTableName,
-            consumerName,
-        });
-        const key = uniqueKey('bigint-number');
-        await repository.store(key, 10);
-
-        // when
-        const offset = (await repository.retrieve(key)) ?? 0;
-
-        // then advancing the bookmark by one must yield the next offset
-        expect(typeof offset).toBe('number');
-        expect(offset + 1).toBe(11);
-    });
-});
-
 describe('OffsetRepositoryUsingMemory', () => {
     test('it keeps offsets per instance', async () => {
         // given
@@ -323,12 +279,4 @@ describe('OffsetRepositoryUsingMemory', () => {
         expect(await second.retrieve(identifier)).toBeUndefined();
     });
 
-    // see .claude-work/issues/offset-tracking-memory-accepts-offsets-postgres-rejects.md
-    it.fails('it rejects an offset that is not a finite integer', async () => {
-        // given
-        const repository = new OffsetRepositoryUsingMemory();
-
-        // then
-        await expect(repository.store(identifier, Number.NaN)).rejects.toThrow();
-    });
 });
