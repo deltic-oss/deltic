@@ -138,10 +138,8 @@ describe('AMQPChannelPool', () => {
      * Callers queue up when the pool is at its maximum. A caller that gave up must not
      * take the channel that is released next with it, because the callers behind it are
      * then left waiting while a channel sits idle in the pool.
-     *
-     * see .claude-work/issues/messaging-channel-pool-strands-waiting-callers.md
      */
-    it.fails('a released channel goes to a caller that is still waiting', async () => {
+    test('a released channel goes to a caller that is still waiting', async () => {
         const pool = new AMQPChannelPool(createFakeConnectionProvider(), {min: 1, max: 1});
 
         const leased = await pool.channel();
@@ -155,6 +153,7 @@ describe('AMQPChannelPool', () => {
 
         await expect(stillWaiting).resolves.toBe(leased);
     });
+
     test('a pooled channel that died with its connection is replaced instead of handed out', async () => {
         const {provider, drop} = createDroppableConnectionProvider();
         const pool = new AMQPChannelPool(provider);

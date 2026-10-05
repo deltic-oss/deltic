@@ -95,8 +95,22 @@ export class AMQPChannelPool {
                 () => blocker.reject(ChannelPoolExhausted.becauseOfTimeout()),
                 timeout,
             );
-            await blocker.promise;
-            clearTimeout(timer);
+
+            try {
+                await blocker.promise;
+            } finally {
+                clearTimeout(timer);
+
+                /**
+                 * A caller leaves the queue however its wait ends. A freed lease that wakes a caller
+                 * who already gave up is lost to the callers still waiting behind it.
+                 */
+                const position = this.blockers.indexOf(blocker);
+
+                if (position !== -1) {
+                    this.blockers.splice(position, 1);
+                }
+            }
 
             /**
              * Being woken means a lease was freed, which is not the same as a channel waiting in
