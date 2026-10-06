@@ -286,12 +286,19 @@ export class DependencyContainer {
         this.recordDependencies([key]);
 
         this.resolutionStack.add(key);
-        const instance = factory(this);
-        this.resolutionStack.delete(key);
 
-        resolved.instance = instance;
+        try {
+            resolved.instance = factory(this);
+        } catch (error) {
+            // Nothing was created, so there is nothing to clean up either
+            this.resolved.delete(key);
 
-        return instance;
+            throw error;
+        } finally {
+            this.resolutionStack.delete(key);
+        }
+
+        return resolved.instance;
     }
 
     private createProxyFor<Service extends object>(
@@ -307,11 +314,23 @@ export class DependencyContainer {
 
             // Proxied services always take part in the cleanup graph, see resolveLazy. The
             // service is tracked again when the proxy is first used after a cleanup.
-            const resolved = this.resolved.get(key) ?? this.trackService(key, cleanup);
+            const tracked = this.resolved.get(key);
+            const resolved = tracked ?? this.trackService(key, cleanup);
+            let instance: Service;
 
             this.resolutionStack.add(key);
-            const instance = factory(this);
-            this.resolutionStack.delete(key);
+
+            try {
+                instance = factory(this);
+            } catch (error) {
+                if (tracked === undefined) {
+                    this.resolved.delete(key);
+                }
+
+                throw error;
+            } finally {
+                this.resolutionStack.delete(key);
+            }
 
             resolved.instance = instance;
 
@@ -391,9 +410,27 @@ export class DependencyContainer {
             this.transparentDependencies.set(key, new Set());
         }
 
+        let instance: Service;
+
+        // The key comes off the resolution stack however the factory ends. A key left behind
+        // would make every later resolution of it look circular, and hand out a proxy instead
+        // of the service or its error.
         this.resolutionStack.add(key);
-        const instance = factory(this);
-        this.resolutionStack.delete(key);
+
+        try {
+            instance = factory(this);
+        } catch (error) {
+            // A failed construction leaves nothing behind, so a retry runs the factory again
+            if (resolved !== undefined) {
+                this.resolved.delete(key);
+            } else {
+                this.transparentDependencies.delete(key);
+            }
+
+            throw error;
+        } finally {
+            this.resolutionStack.delete(key);
+        }
 
         if (cache && !lazy) {
             if (resolved) {

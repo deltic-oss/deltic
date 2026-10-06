@@ -72,6 +72,10 @@ const service = container.resolve(myNameService);
 expect(service.fullName()).toEqual('Frank de Jonge');
 ```
 
+A factory that throws hands its error to whoever resolved the service and leaves nothing behind:
+nothing is cached and nothing is registered for cleanup, so the next resolution runs the factory
+again. A transient failure, such as a database that was briefly unreachable, can simply be retried.
+
 ## Cleanup ordering
 
 `container.cleanup()` shuts down what was actually used, in an order derived from how it was
