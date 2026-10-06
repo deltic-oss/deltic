@@ -220,10 +220,16 @@ importers:
       '@deltic/uid':
         specifier: workspace:^
         version: link:../uid
+      object-hash:
+        specifier: ^3.0.0
+        version: 3.0.0
       pg:
         specifier: ^8.16.3
         version: 8.16.3
     devDependencies:
+      '@types/object-hash':
+        specifier: ^3.0.6
+        version: 3.0.6
       '@types/pg':
         specifier: ^8.20.0
         version: 8.20.0
@@ -1326,6 +1332,9 @@ packages:
   '@types/node@25.5.2':
     resolution: {integrity: sha512-tO4ZIRKNC+MDWV4qKVZe3Ql/woTnmHDr5JD8UI5hn2pwBrHEwOEMZK7WlNb5RKB6EoJ02gwmQS9OrjuFnZYdpg==}
 
+  '@types/object-hash@3.0.6':
+    resolution: {integrity: sha512-fOBV8C1FIu2ELinoILQ+ApxcUKz4ngq+IWUYrxSGjXzzjUALijilampwkMgEtJ+h2njAW3pi853QpzNVCHB73w==}
+
   '@types/pg-cursor@2.7.2':
     resolution: {integrity: sha512-m3xT8bVFCvx98LuzbvXyuCdT/Hjdd/v8ml4jL4K1QF70Y8clOfCFdgoaEB1FWdcSwcpoFYZTJQaMD9/GQ27efQ==}
 
@@ -2338,6 +2347,10 @@ packages:
 
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
+
+  object-hash@3.0.0:
+    resolution: {integrity: sha512-RSn9F68PjH9HqtltsSnqYC1XXoWe9Bju5+213R98cNGttag9q9yAOTzdbsqvIa7aNm5WffBZFpWYr2aWrklWAw==}
+    engines: {node: '>= 6'}
 
   obug@2.1.1:
     resolution: {integrity: sha512-uTqF9MuPraAQ+IsnPf366RG4cP9RtUi7MLO1N3KEc+wb0a6yKpeL0lmk2IB1jY5KHPAlTc6T/JRdC/YqxHNwkQ==}
@@ -3768,6 +3781,8 @@ snapshots:
     dependencies:
       undici-types: 7.18.2
 
+  '@types/object-hash@3.0.6': {}
+
   '@types/pg-cursor@2.7.2':
     dependencies:
       '@types/node': 25.5.2
@@ -4657,6 +4672,8 @@ snapshots:
   nanoid@3.3.11: {}
 
   natural-compare@1.4.0: {}
+
+  object-hash@3.0.0: {}
 
   obug@2.1.1: {}
 

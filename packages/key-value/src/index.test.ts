@@ -1,6 +1,7 @@
 import {type KeyType, type KeyValueStore, SortingKeyNormalisation, type ValueType} from './index.js';
 import {KeyValueStoreUsingMemory} from './memory.js';
 import {createKeyValueSchemaQuery, KeyValueStoreUsingPg} from './pg.js';
+import {objectHashKeyConversion} from './object-hash.js';
 import {Pool} from 'pg';
 import {AsyncPgPool} from '@deltic/async-pg-pool';
 import {ValueReadWriterUsingMemory} from '@deltic/context';
@@ -298,6 +299,33 @@ describe('KeyValueStoreUsingPg', () => {
 
             const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName}`);
             expect(rows.map(row => row.key)).toEqual(['prefixed:{"first":1,"second":2}']);
+        });
+
+        test('objectHashKeyConversion stores an object key as a hash of a fixed length', async () => {
+            const hashedStore = new KeyValueStoreUsingPg<{description: string}, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyConversion: objectHashKeyConversion,
+            });
+            const key = {description: 'x'.repeat(300)};
+
+            await hashedStore.persist(key, 'value');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName}`);
+            expect(rows.map(row => row.key.length)).toEqual([128]);
+            expect(await hashedStore.retrieve(key)).toBe('value');
+        });
+
+        test('objectHashKeyConversion stores a scalar key as its string form', async () => {
+            const hashedStore = new KeyValueStoreUsingPg<string | number, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyConversion: objectHashKeyConversion,
+            });
+
+            await hashedStore.persist('readable-key', 'string');
+            await hashedStore.persist(42, 'number');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName} ORDER BY "key"`);
+            expect(rows.map(row => row.key)).toEqual(['42', 'readable-key']);
         });
     });
 

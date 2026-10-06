@@ -27,6 +27,12 @@
       "require": "./dist/pg-with-columns.cjs",
       "module-sync": "./dist/pg-with-columns.mjs",
       "types": "./dist/pg-with-columns.d.mts"
+    },
+    "./object-hash": {
+      "import": "./dist/object-hash.mjs",
+      "require": "./dist/object-hash.cjs",
+      "module-sync": "./dist/object-hash.mjs",
+      "types": "./dist/object-hash.d.mts"
     }
   },
   "keywords": [
@@ -48,13 +54,18 @@
   "peerDependencies": {
     "@deltic/context": "workspace:^",
     "@deltic/uid": "workspace:^",
+    "object-hash": "^3.0.0",
     "pg": "^8.16.3"
   },
   "devDependencies": {
+    "@types/object-hash": "^3.0.6",
     "@types/pg": "^8.20.0",
     "uuid": "^13.0.0"
   },
   "peerDependenciesMeta": {
+    "object-hash": {
+      "optional": true
+    },
     "@deltic/context": {
       "optional": true
     },

@@ -108,6 +108,25 @@ which stores an object key as its JSON; that has to fit the `key` column's 255 c
 Interpolating an object key (`` key => `prefix:${key}` ``) turns every one of them into
 `prefix:[object Object]`.
 
+#### Hashed Keys
+
+`objectHashKeyConversion` stores an object or array key as a SHA3-512 hash of its contents, and any
+other key as its string form. A hash fits the `key` column whatever the size of the key, but it cannot
+be read back into the key. It needs `object-hash`:
+
+```bash
+npm install object-hash
+```
+
+```typescript
+import {objectHashKeyConversion} from '@deltic/key-value/object-hash';
+
+const store = new KeyValueStoreUsingPg<{tenant: string; day: string}, Report>(asyncPool, {
+    tableName: 'reports',
+    keyConversion: objectHashKeyConversion,
+});
+```
+
 ### PostgreSQL with Columns
 
 For cases where you want specific object properties stored as separate database columns (enabling queries and indexes) while preserving the full object as a JSON payload:
