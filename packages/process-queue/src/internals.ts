@@ -1,5 +1,5 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {type ProcessQueue, ProcessQueueDefaults, type ProcessQueueOptions} from './api.js';
+import {type ProcessQueue, ProcessQueueDefaults, type ProcessQueueOptions, TaskWasPurged} from './api.js';
 
 /**
  * Holds the runner whose callback (processor or hook) is running. A callback cannot wait for the
@@ -76,11 +76,19 @@ export class ProcessQueueRunner<Task> {
     }
 
     /**
-     * Stops the queue and drops the tasks that are waiting.
+     * Stops the queue and drops the tasks that are waiting, rejecting them with `TaskWasPurged`.
      */
     async purge(): Promise<void> {
         await this.stop();
+        const purged = this.backlog.filter(item => !this.inFlight.has(item));
         this.backlog = this.backlog.filter(item => this.inFlight.has(item));
+
+        for (const item of purged) {
+            // Like a skipped task, a purged one must not become an unhandled rejection for a caller that
+            // let go of its promise; a caller that awaits it still sees the rejection.
+            item.promise.catch(() => {});
+            item.reject(TaskWasPurged.beforeItWasProcessed());
+        }
     }
 
     private halt(): void {
