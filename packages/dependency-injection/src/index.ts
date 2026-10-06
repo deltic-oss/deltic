@@ -250,7 +250,11 @@ export class DependencyContainer {
 
             if (ancestorService) {
                 for (const dependency of dependencies) {
-                    ancestorService.dependencies.add(dependency);
+                    // A service that resolves itself, lazily or through a cycle, is not its own
+                    // dependency: a self-edge carries no order, and would make the graph unorderable
+                    if (dependency !== ancestor) {
+                        ancestorService.dependencies.add(dependency);
+                    }
                 }
 
                 return; // Only record for the nearest parent
