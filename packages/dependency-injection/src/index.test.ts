@@ -887,8 +887,9 @@ describe('@deltic/dependency-injection', () => {
             expect(instance.name).toEqual('flaky');
         });
 
-        // see .claude-work/issues/dependency-injection-circular-proxy-dereferenced-during-construction.md
-        it.fails('hands every consumer the same instance when a circular proxy is used during construction', () => {
+        test('refuses to use a circular proxy during construction instead of constructing the service twice', () => {
+            // A proxy that is used while its service is still being constructed would need the very
+            // instance that is still being built, which no synchronous factory can provide.
             interface MemberIndex {
                 names: string[];
             }
@@ -908,15 +909,13 @@ describe('@deltic/dependency-injection', () => {
                 factory: c => ({names: [c.resolve(memberKey).name]}),
             });
 
-            const member = container.resolve(memberKey);
-            const index = container.resolve(indexKey);
-
+            expect(() => container.resolve(memberKey)).toThrow(
+                'Circular dependency: "member" was used while it was still being constructed (member -> index -> member).',
+            );
             expect(constructions).toEqual(1);
-            expect(index.names).toEqual([member.name]);
         });
 
-        // see .claude-work/issues/dependency-injection-circular-proxy-dereferenced-during-construction.md
-        it.fails('reports a circular dependency when both services are used during construction', () => {
+        test('reports a circular dependency when both services are used during construction', () => {
             // eslint-disable-next-line prefer-const
             let rightKey: ServiceKey<Dependency>;
             const leftKey = container.register<Dependency>('left', {

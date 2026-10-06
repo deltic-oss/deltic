@@ -193,6 +193,16 @@ dependency resolution. This is a standard approach used by almost all DI contain
 Deltic Dependency Injection automatically detects circular references and resolves dependencies
 using proxies, which defer the instantiation, which breaks the looop. Problem solved!
 
+A proxy can only defer what is not needed yet: it may be *stored* while the service it stands in for
+is being constructed, but not *used*, because using it would need the very instance that is still
+being built. The container refuses that instead of constructing the service a second time:
+
+```
+Circular dependency: "member" was used while it was still being constructed (member -> index -> member). …
+```
+
+Store the dependency in the constructor and use it in methods that run afterwards.
+
 At shutdown, a service that resolves itself, or a cycle in which only one service has a cleanup, is
 cleaned up like anything else. A cycle between two services that both have a cleanup cannot be
 ordered, each would have to outlive the other, so `cleanup()` refuses it before running any hook.
