@@ -42,6 +42,40 @@ interface ResolvedService {
     instance: any;
 }
 
+/**
+ * A service whose cleanup hook threw or rejected.
+ */
+export interface CleanupFailure {
+    readonly service: string;
+    readonly error: unknown;
+}
+
+/**
+ * One or more cleanup hooks failed. Every other hook still ran, and so did the hooks of the services
+ * the failing ones depend on. `errors` holds what the hooks threw, `failures` pairs each of those with
+ * its service.
+ */
+export class CleanupFailed extends AggregateError {
+    private constructor(
+        readonly failures: readonly CleanupFailure[],
+        message: string,
+    ) {
+        super(
+            failures.map(failure => failure.error),
+            message,
+        );
+        this.name = 'CleanupFailed';
+    }
+
+    static forFailures = (failures: readonly CleanupFailure[]) =>
+        new CleanupFailed(
+            failures,
+            `Cleanup failed for ${failures
+                .map(({service, error}) => `${service} (${error instanceof Error ? error.message : String(error)})`)
+                .join('; ')}.`,
+        );
+}
+
 declare const service: unique symbol;
 
 export type ServiceKey<Service> = string & {
@@ -110,15 +144,31 @@ export class DependencyContainer {
         return this.cleanupInProgress;
     }
 
+    /**
+     * Shutdown is best effort: a failing hook stops neither its siblings nor the levels beneath it,
+     * which hold the shared resources everything else was built on. Every failure is reported once
+     * the whole graph was walked.
+     */
     private async runCleanup(): Promise<void> {
         const levels = this.computeShutdownLevels();
+        const failures: CleanupFailure[] = [];
 
         for (const level of levels) {
             await Promise.all(
-                level.map(key => {
+                // `async`, so a hook that throws synchronously fails on its own instead of keeping
+                // the rest of its level from starting
+                level.map(async key => {
                     const resolved = this.resolved.get(key);
 
-                    return resolved?.instance === undefined ? Promise.resolve() : resolved.cleanup?.(resolved.instance);
+                    if (resolved?.instance === undefined) {
+                        return;
+                    }
+
+                    try {
+                        await resolved.cleanup?.(resolved.instance);
+                    } catch (error) {
+                        failures.push({service: key, error});
+                    }
                 }),
             );
         }
@@ -126,6 +176,10 @@ export class DependencyContainer {
         this.cache.clear();
         this.resolved.clear();
         this.transparentDependencies.clear();
+
+        if (failures.length > 0) {
+            throw CleanupFailed.forFailures(failures);
+        }
     }
 
     /**

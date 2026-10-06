@@ -1,4 +1,5 @@
 import {
+    CleanupFailed,
     DependencyContainer,
     reflectMethods,
     container as exportedContainer,
@@ -936,8 +937,7 @@ describe('@deltic/dependency-injection', () => {
 
         beforeEach(() => (segments = []));
 
-        // see .claude-work/issues/dependency-injection-cleanup-aborts-on-first-failing-hook.md
-        it.fails('shuts down a dependency when the service consuming it fails to shut down', async () => {
+        test('shuts down a dependency when the service consuming it fails to shut down', async () => {
             const poolKey = container.register('pool', {
                 factory: () => new Dependency('pool'),
                 cleanup: () => {
@@ -959,8 +959,7 @@ describe('@deltic/dependency-injection', () => {
             expect(segments).toEqual(['relay', 'pool']);
         });
 
-        // see .claude-work/issues/dependency-injection-cleanup-aborts-on-first-failing-hook.md
-        it.fails('shuts down the remaining services in a level when one hook throws synchronously', async () => {
+        test('shuts down the remaining services in a level when one hook throws synchronously', async () => {
             const brokenKey = container.register('broken', {
                 factory: () => new Dependency('broken'),
                 cleanup: () => {
@@ -983,8 +982,7 @@ describe('@deltic/dependency-injection', () => {
             expect(segments.toSorted()).toEqual(['broken', 'healthy']);
         });
 
-        // see .claude-work/issues/dependency-injection-cleanup-aborts-on-first-failing-hook.md
-        it.fails('reports every shutdown failure, not only the first', async () => {
+        test('reports every shutdown failure, not only the first', async () => {
             for (const name of ['first', 'second']) {
                 const key = container.register(name, {
                     factory: () => new Dependency(name),
@@ -999,12 +997,39 @@ describe('@deltic/dependency-injection', () => {
                 () => undefined,
                 (error: unknown) => error,
             );
-            const reported =
-                failure instanceof AggregateError
-                    ? failure.errors.map((error: unknown) => (error as Error).message)
-                    : [(failure as Error).message];
 
-            expect(reported.toSorted()).toEqual(['first failed to stop', 'second failed to stop']);
+            expect(failure).toBeInstanceOf(CleanupFailed);
+            expect((failure as CleanupFailed).errors.map((error: Error) => error.message).toSorted()).toEqual([
+                'first failed to stop',
+                'second failed to stop',
+            ]);
+            expect((failure as CleanupFailed).failures.map(({service}) => service).toSorted()).toEqual([
+                'first',
+                'second',
+            ]);
+        });
+
+        test('forgets what it shut down when a hook failed, so a later cleanup runs no hook twice', async () => {
+            const poolKey = container.register('pool', {
+                factory: () => new Dependency('pool'),
+                cleanup: () => {
+                    segments.push('pool');
+                },
+            });
+            const relayKey = container.register('relay', {
+                factory: c => new Middle('relay', c.resolve(poolKey)),
+                cleanup: () => {
+                    segments.push('relay');
+                    throw new Error('relay refused to stop');
+                },
+            });
+
+            container.resolve(relayKey);
+
+            await expect(container.cleanup()).rejects.toBeInstanceOf(CleanupFailed);
+            await container.cleanup();
+
+            expect(segments).toEqual(['relay', 'pool']);
         });
     });
 
