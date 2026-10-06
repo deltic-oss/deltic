@@ -1,6 +1,7 @@
 import {
     type IdConversion,
     type IdFactory,
+    type IdValidator,
     NoIdConversion,
     type PrefixedId,
     PrefixedBrandedIdConversion,
@@ -147,10 +148,7 @@ describe('PrefixedBrandedIdConversion', () => {
 });
 
 describe('prefixedIdValidator', () => {
-    // A validator that only returns a boolean cannot be handed to prefixedIdValidator today,
-    // see .claude-work/issues/uid-validator-interface-rejects-plain-predicates.md
-    const isUuid = (id: unknown): id is string => typeof id === 'string' && isValidUuid(id);
-    const isPersonId = prefixedIdValidator('person', isUuid);
+    const isPersonId = prefixedIdValidator('person', isValidUuid);
     const uuid = uuidV7();
 
     test.each<[string, unknown, boolean]>([
@@ -192,14 +190,21 @@ describe('prefixedIdValidator', () => {
         expect(conversion.toDatabase(candidate)).toBe(uuid);
     });
 
-    test('it needs a type guard rather than a plain predicate', () => {
-        // The README composes prefixedIdValidator with uuid's validate, which only returns a
-        // boolean. That does not satisfy IdValidator, so the documented usage does not compile.
-        // see .claude-work/issues/uid-validator-interface-rejects-plain-predicates.md
-        // @ts-expect-error a plain predicate is not accepted as an IdValidator
-        const isPersonIdByPlainPredicate = prefixedIdValidator('person', isValidUuid);
+    test('it accepts a plain predicate as well as a type guard for the rest of the id', () => {
+        // The README composes prefixedIdValidator with uuid's validate, which only returns a boolean.
+        const isUuid = (id: unknown): id is string => typeof id === 'string' && isValidUuid(id);
+        const isNumeric = (id: string): boolean => /^[0-9]+$/.test(id);
 
-        expect(isPersonIdByPlainPredicate(`person_${uuid}`)).toBe(true);
+        expect(prefixedIdValidator('person', isValidUuid)(`person_${uuid}`)).toBe(true);
+        expect(prefixedIdValidator('person', isUuid)(`person_${uuid}`)).toBe(true);
+        expect(prefixedIdValidator('invoice', isNumeric)('invoice_42')).toBe(true);
+        expect(prefixedIdValidator('invoice', isNumeric)('invoice_4x')).toBe(false);
+    });
+
+    test('it produces a guard that satisfies IdValidator', () => {
+        const validator: IdValidator<PersonId> = prefixedIdValidator('person', isValidUuid);
+
+        expect(validator(`person_${uuid}`)).toBe(true);
     });
 
     test('it does not accept an id that only satisfies the nested validator', () => {
