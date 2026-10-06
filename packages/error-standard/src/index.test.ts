@@ -250,16 +250,18 @@ describe('@deltic/error-standard', () => {
             expect(errorToMessage(new Error())).toBe('Error');
         });
 
-        // see .claude-work/issues/error-standard-message-extraction-can-throw.md
-        it.fails('does not mask the original failure when the thrown value cannot be stringified', () => {
+        it('does not mask the original failure when the thrown value cannot be stringified', () => {
             const withFailingConversion = {
                 toString() {
                     throw new Error('toString exploded');
                 },
             };
 
-            expect(() => UnableToClaimConnection.because(withFailingConversion)).not.toThrow();
-            expect(() => errorToMessage(Object.create(null))).not.toThrow();
+            const wrapped = UnableToClaimConnection.because(withFailingConversion);
+
+            expect(wrapped.message).toBe('Unable to claim connection: [unprintable object]');
+            expect(wrapped.cause).toBe(withFailingConversion);
+            expect(errorToMessage(Object.create(null))).toBe('[unprintable object]');
         });
     });
 

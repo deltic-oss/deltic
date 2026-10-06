@@ -17,16 +17,16 @@ type DeliveryHandler = (message: AMQPMessage | null) => void;
 
 let deliveryTag = 0;
 
-function amqpDeliveryOf(content: string): AMQPMessage {
+function amqpDeliveryOf(content: string, redelivered: boolean = false): AMQPMessage {
     return {
         content: Buffer.from(content),
-        fields: {deliveryTag: ++deliveryTag, redelivered: false, exchange: '', routingKey: '', consumerTag: 'tag'},
+        fields: {deliveryTag: ++deliveryTag, redelivered, exchange: '', routingKey: '', consumerTag: 'tag'},
         properties: {contentType: 'application/json', headers: {}},
     } as unknown as AMQPMessage;
 }
 
-function amqpDeliveryFor(message: AnyMessageFrom<ExampleStream>): AMQPMessage {
-    return amqpDeliveryOf(JSON.stringify(message));
+function amqpDeliveryFor(message: AnyMessageFrom<ExampleStream>, redelivered: boolean = false): AMQPMessage {
+    return amqpDeliveryOf(JSON.stringify(message), redelivered);
 }
 
 /**
@@ -199,6 +199,10 @@ function consumerThatCollects(collected: AnyMessageFrom<ExampleStream>[]): Messa
 }
 
 const queueName = 'example_queue';
+
+class BrokerIsGone extends Error {
+    readonly isUnrecoverable = true as const;
+}
 
 describe('AMQPMessageRelay', () => {
     let pool: ObservableChannelPool;
@@ -653,13 +657,10 @@ describe('AMQPMessageRelay', () => {
     });
 
     /**
-     * Delivery attempts are counted per event_id. Messages that carry no event_id all
-     * share a single counter, so unrelated messages consume each other's attempts and
-     * get discarded on their first failure.
-     *
-     * see .claude-work/issues/messaging-delivery-attempts-shared-without-event-id.md
+     * Nothing guarantees an event_id: the stack's default wiring publishes none, and other
+     * producers may not either. Unrelated messages must not use up each other's attempts.
      */
-    it.fails('every message has its own delivery attempts when no event id is present', async () => {
+    test('every message has its own delivery attempts when no event id is present', async () => {
         relay = new AMQPMessageRelay<ExampleStream>(
             pool.asChannelPool(),
             {
@@ -686,13 +687,93 @@ describe('AMQPMessageRelay', () => {
         expect(channel.nacked.map(n => n.requeue)).toEqual([true, true]);
     });
 
+    test('a message without an event id is dead-lettered once its own attempts are exhausted', async () => {
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            {
+                async consume() {
+                    throw new Error('handler is unhappy');
+                },
+            },
+            {queueNames: [queueName], maxDeliveryAttempts: 3},
+        );
+        void relay.start();
+        const channel = await waitForChannel(pool);
+        const deliver = await channel.deliveryTo(queueName);
+        const message = createMessage<ExampleStream>('example', {value: 'one'}, {aggregate_root_id: 'aggregate-1'});
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            deliver(amqpDeliveryFor(message, attempt > 1));
+            await channel.outcomes(attempt);
+        }
+
+        expect(channel.nacked.map(n => n.requeue)).toEqual([true, true, false]);
+    });
+
+    test('a dead-lettered message that is put back on the queue starts its attempts over', async () => {
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            {
+                async consume() {
+                    throw new Error('handler is unhappy');
+                },
+            },
+            {queueNames: [queueName], maxDeliveryAttempts: 2},
+        );
+        void relay.start();
+        const channel = await waitForChannel(pool);
+        const deliver = await channel.deliveryTo(queueName);
+        const message = createMessage<ExampleStream>('example', {value: 'one'}, {event_id: 'event-1'});
+
+        deliver(amqpDeliveryFor(message));
+        await channel.outcomes(1);
+        deliver(amqpDeliveryFor(message, true));
+        await channel.outcomes(2);
+        // moved back from the dead-letter queue, which makes it a first delivery again
+        deliver(amqpDeliveryFor(message));
+        await channel.outcomes(3);
+
+        expect(channel.nacked.map(n => n.requeue)).toEqual([true, false, true]);
+    });
+
+    /**
+     * Attempts count towards giving up on one stay of a message on the queue. Once it was handled,
+     * a later failure of the same message (put back on the queue, replayed) starts over.
+     */
+    test('a message that was handled starts its delivery attempts over', async () => {
+        const outcomes = ['fail', 'succeed', 'fail'];
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            {
+                async consume() {
+                    if (outcomes.shift() === 'fail') {
+                        throw new Error('handler is unhappy');
+                    }
+                },
+            },
+            {queueNames: [queueName], maxDeliveryAttempts: 2},
+        );
+        void relay.start();
+        const channel = await waitForChannel(pool);
+        const deliver = await channel.deliveryTo(queueName);
+        const message = createMessage<ExampleStream>('example', {value: 'one'}, {event_id: 'event-1'});
+
+        deliver(amqpDeliveryFor(message));
+        await channel.outcomes(1);
+        deliver(amqpDeliveryFor(message, true));
+        await channel.outcomes(2);
+        deliver(amqpDeliveryFor(message, true));
+        await channel.outcomes(3);
+
+        expect(channel.acked).toHaveLength(1);
+        expect(channel.nacked.map(n => n.requeue)).toEqual([true, true]);
+    });
+
     /**
      * Relays are stopped and started again around deployments and when a supervising
      * process decides to pause consumption.
-     *
-     * see .claude-work/issues/messaging-amqp-relay-cannot-restart.md
      */
-    it.fails('it can be started again after it was stopped', async () => {
+    test('it can be started again after it was stopped', async () => {
         relay = new AMQPMessageRelay<ExampleStream>(
             pool.asChannelPool(),
             consumerThatCollects([]),
@@ -708,6 +789,38 @@ describe('AMQPMessageRelay', () => {
         ]);
 
         expect(outcome).toEqual('running');
+    });
+
+    test('a relay that gave up on the broker can be started again', async () => {
+        const consumed: AnyMessageFrom<ExampleStream>[] = [];
+        pool.failNextRequest(new BrokerIsGone('the broker is not coming back'));
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            consumerThatCollects(consumed),
+            {queueNames: [queueName]},
+        );
+        await expect(relay.start()).rejects.toThrow(BrokerIsGone);
+
+        void relay.start();
+        const channel = await waitForChannel(pool);
+        (await channel.deliveryTo(queueName))(
+            amqpDeliveryFor(createMessage<ExampleStream>('example', {value: 'one'})),
+        );
+        await channel.outcomes(1);
+
+        expect(consumed.map(m => m.payload)).toEqual([{value: 'one'}]);
+    });
+
+    test('starting a relay that is running is refused', async () => {
+        relay = new AMQPMessageRelay<ExampleStream>(
+            pool.asChannelPool(),
+            consumerThatCollects([]),
+            {queueNames: [queueName]},
+        );
+        void relay.start();
+        await (await waitForChannel(pool)).deliveryTo(queueName);
+
+        await expect(relay.start()).rejects.toThrow('AMQP message relay was already started');
     });
 });
 

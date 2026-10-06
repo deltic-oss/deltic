@@ -181,9 +181,10 @@ default, an `AMQPConnectionProviderOptions` option), and a broker that rejects e
 credential is not retried at all. Both give-ups are unrecoverable errors (`UnableToHealAMQPConnection`,
 `UnableToAuthenticateWithAMQP`, recognised by `isUnrecoverableError` from `@deltic/error-standard`):
 the dispatcher passes them on unwrapped instead of spending its remaining tries, and a relay ends
-its run with them — `start()` rejects — so the process can exit and be restarted. A caller that
-must not wait out the healing window, such as one serving a request, bounds each attempt with the
-pool's `connectionTimeout`, which fails with an ordinary `UnableToEstablishConnection`.
+its run with them — `start()` rejects — so the process can exit and be restarted. A relay whose run
+ended, by `stop()` or by such a failure, can be started again. A caller that must not wait out the
+healing window, such as one serving a request, bounds each attempt with the pool's
+`connectionTimeout`, which fails with an ordinary `UnableToEstablishConnection`.
 
 A relay hands the consumer the message parsed from each delivery's JSON body. A delivery that cannot
 be read that way (not JSON, or not an object with a string `type`) is rejected without being

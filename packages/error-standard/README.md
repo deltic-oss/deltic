@@ -125,6 +125,10 @@ value's string representation for anything else — `'a reason'` for a thrown st
 number, `'undefined'` for `undefined`, and `'[object Object]'` for a plain object, which is a hint
 to throw `Error`s instead.
 
+It never throws, so it is safe to call while reporting a failure: a value that cannot be converted to
+a string, such as an object without a prototype or one whose `toString` throws, is reported as
+`'[unprintable object]'`.
+
 ### `UnrecoverableError`
 
 ```typescript
