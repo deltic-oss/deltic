@@ -143,8 +143,7 @@ describe('exponential backoff', () => {
             expect(delay).toBeGreaterThan(0);
         });
 
-        // see .claude-work/issues/backoff-zero-initial-delay-yields-nan-delay.md
-        it.fails('yields a finite delay for a high attempt count when the initial delay is zero', () => {
+        test('yields a finite delay for a high attempt count when the initial delay is zero', () => {
             const backoffStrategy = new ExponentialBackoffStrategy(0, -1);
 
             expect(Number.isFinite(backoffStrategy.backOff(Number.MAX_SAFE_INTEGER))).toBe(true);
