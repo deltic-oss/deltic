@@ -1,4 +1,11 @@
-import type {KeyType, KeyValueStore, ValueType, KeyConversion} from './index.js';
+import {
+    type KeyConversion,
+    type KeyNormalisation,
+    type KeyType,
+    type KeyValueStore,
+    SortingKeyNormalisation,
+    type ValueType,
+} from './index.js';
 import type {QueryResult, QueryResultRow} from 'pg';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {ValueReader} from '@deltic/context';
@@ -16,6 +23,15 @@ export interface KeyValueStoreUsingPgOptions<
     TenantId extends string | number,
 > {
     tableName: string;
+    /**
+     * Brings a key into the form the store addresses it by. The default sorts the properties of
+     * object keys, so the order a key was built in does not matter.
+     */
+    keyNormalisation?: KeyNormalisation<Key>;
+    /**
+     * Turns a normalised key into the value stored in the `key` column. The default hands the key to
+     * `pg` as it is, which stores an object as its JSON.
+     */
     keyConversion?: KeyConversion<Key, DatabaseKey>;
 
     tenantContext?: ValueReader<TenantId>;
@@ -29,6 +45,7 @@ export class KeyValueStoreUsingPg<
     TenantId extends string | number = string | number,
 > implements KeyValueStore<Key, Value> {
     private readonly tableName: string;
+    private readonly keyNormalisation: KeyNormalisation<Key>;
     private readonly keyConversion: KeyConversion<Key, DatabaseKey>;
     private readonly tenantContext?: ValueReader<TenantId>;
     private readonly tenantIdConversion?: IdConversion<TenantId>;
@@ -38,13 +55,14 @@ export class KeyValueStoreUsingPg<
         readonly options: KeyValueStoreUsingPgOptions<Key, DatabaseKey, TenantId>,
     ) {
         this.tableName = options.tableName;
+        this.keyNormalisation = options.keyNormalisation ?? new SortingKeyNormalisation<Key>();
         this.keyConversion = options.keyConversion ?? (key => key as unknown as DatabaseKey);
         this.tenantContext = options.tenantContext;
         this.tenantIdConversion = options.tenantIdConversion;
     }
 
     async persist(key: Key, value: Value): Promise<void> {
-        const resolvedKey = this.keyConversion(key);
+        const resolvedKey = this.databaseKey(key);
         const tenantId = this.databaseTenantId();
         const values: any[] = [resolvedKey, {value}];
         const references: string[] = ['$1', '$2'];
@@ -67,7 +85,7 @@ export class KeyValueStoreUsingPg<
     }
 
     async retrieve(key: Key): Promise<Value | undefined> {
-        const {condition, values} = this.keyCondition(this.keyConversion(key));
+        const {condition, values} = this.keyCondition(this.databaseKey(key));
         const result = await this.query<StoredRecord<Value>>(
             `
             SELECT "value"
@@ -81,7 +99,7 @@ export class KeyValueStoreUsingPg<
     }
 
     async remove(key: Key): Promise<void> {
-        const {condition, values} = this.keyCondition(this.keyConversion(key));
+        const {condition, values} = this.keyCondition(this.databaseKey(key));
         await this.query(`DELETE FROM ${this.tableName} WHERE ${condition}`, values);
     }
 
@@ -93,6 +111,10 @@ export class KeyValueStoreUsingPg<
         } else {
             await this.query(`DELETE FROM ${this.tableName} WHERE tenant_id = $1`, [tenantId]);
         }
+    }
+
+    private databaseKey(key: Key): DatabaseKey {
+        return this.keyConversion(this.keyNormalisation.normalise(key));
     }
 
     private keyCondition(resolvedKey: DatabaseKey): {condition: string; values: unknown[]} {
