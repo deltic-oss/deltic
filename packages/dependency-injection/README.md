@@ -110,6 +110,13 @@ process.on('SIGINT', shutdown);
 
 Once a cleanup has finished, a later call starts a new one for whatever was resolved since.
 
+A cleanup leaves the registrations in place and forgets the instances: resolving a service after a
+cleanup constructs it again, and the next cleanup cleans that one up. A registered instance with a
+`cleanup` is the exception: the container did not construct it, so it cannot construct a new one,
+and resolving it after its cleanup ran throws instead of handing out an instance that was shut down.
+A reference obtained before the cleanup, or a proxy that was already used, keeps pointing at the
+instance that was cleaned up.
+
 A service resolved while a cleanup is running, by a request that is still being handled for
 example, is cleaned up by that same cleanup: each step is taken from the graph as it is at that
 moment, so the late service is cleaned up before whatever it depends on that has not been cleaned up
