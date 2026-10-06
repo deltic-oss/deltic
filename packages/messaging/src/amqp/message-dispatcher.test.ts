@@ -1,5 +1,6 @@
 import {AMQPMessageDispatcher, UnableToDispatchMessages} from './message-dispatcher.js';
-import {type AMQPChannelPool} from './channel-pool.js';
+import {type AMQPChannelPool, ChannelNotLeased} from './channel-pool.js';
+import {UnableToHealAMQPConnection} from './connection-provider.js';
 import type {StreamDefinition} from '../index.js';
 
 interface TestStream extends StreamDefinition {
@@ -182,5 +183,60 @@ describe('AMQPMessageDispatcher', () => {
         });
 
         expect(published[0].routingKey).toEqual('custom.test_event');
+    });
+    /**
+     * The channel of a failed try is released before the next try asks for another one. When
+     * that ask fails, the previous channel must not be released a second time: the pool rejects
+     * that, and the rejection would replace the failure the caller needs to see.
+     */
+    test('a failed try releases its channel once, even when the next try cannot get a channel', async () => {
+        const leased = new Set<object>();
+        let requests = 0;
+        let releases = 0;
+        const pool = {
+            channel: async () => {
+                requests++;
+
+                if (requests > 1) {
+                    throw new Error('Channel unavailable');
+                }
+
+                const channel = createFakeChannel({shouldFail: true});
+                leased.add(channel);
+
+                return channel;
+            },
+            release: async (channel: object) => {
+                releases++;
+
+                if (!leased.delete(channel)) {
+                    throw ChannelNotLeased.onRelease();
+                }
+            },
+        } as unknown as AMQPChannelPool;
+        const dispatcher = new AMQPMessageDispatcher<TestStream>(pool, {exchange: 'test-exchange', maxTries: 2});
+
+        const error = await dispatcher.send({type: 'test_event', payload: {name: 'Frank'}, headers: {}})
+            .catch((error: unknown) => error);
+
+        expect(error).toBeInstanceOf(UnableToDispatchMessages);
+        expect((error as UnableToDispatchMessages).cause).toEqual(new Error('Channel unavailable'));
+        expect(releases).toEqual(1);
+    });
+
+    test('an unrecoverable failure is passed on without spending the remaining tries', async () => {
+        const unreachable = UnableToHealAMQPConnection.afterTryingFor('shared', 60_000, new Error('connect ECONNREFUSED'));
+        let requests = 0;
+        const pool = {
+            channel: async () => {
+                requests++;
+                throw unreachable;
+            },
+            release: async () => {},
+        } as unknown as AMQPChannelPool;
+        const dispatcher = new AMQPMessageDispatcher<TestStream>(pool, {exchange: 'test-exchange', maxTries: 5});
+
+        await expect(dispatcher.send({type: 'test_event', payload: {name: 'Frank'}, headers: {}})).rejects.toBe(unreachable);
+        expect(requests).toEqual(1);
     });
 });
