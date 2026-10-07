@@ -1,12 +1,84 @@
 import {Pool} from 'pg';
-import {AsyncPgPool, asyncPoolContext, type AsyncPoolContext} from '@deltic/async-pg-pool';
-import {AsyncKnexConnectionProvider} from './index.js';
+import {
+    AsyncPgPool,
+    asyncPoolContext,
+    type AsyncPgPoolOptions,
+    type AsyncPoolContext,
+} from '@deltic/async-pg-pool';
+import type {Knex} from 'knex';
+import {AsyncKnexConnectionProvider, extractPgConnection, type ConnectionProvider, type Transaction} from './index.js';
 import {pgConnectionSymbol} from './transaction-wrapper.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {pgTestCredentials} from '../../pg-credentials.js';
 
 const asyncLocalStorage = new AsyncLocalStorage<AsyncPoolContext>();
 const setupContext = () => asyncLocalStorage.enterWith(asyncPoolContext());
+
+interface DedicatedStack {
+    pgPool: Pool;
+    asyncPool: AsyncPgPool;
+    provider: AsyncKnexConnectionProvider;
+}
+
+/**
+ * Builds a provider on top of a pool that is not shared with any other test, so
+ * pool capacity and connection lifecycle can be reasoned about without looking
+ * at global database state. A leaked connection makes the next claim fail on the
+ * connection timeout instead of hanging.
+ */
+const withDedicatedStack = async <R>(
+    setup: {connections: number; options?: AsyncPgPoolOptions},
+    use: (stack: DedicatedStack) => Promise<R>,
+): Promise<R> => {
+    const pgPool = new Pool({
+        ...pgTestCredentials,
+        max: setup.connections,
+        connectionTimeoutMillis: 1000,
+    });
+    const asyncPool = new AsyncPgPool(pgPool, {keepConnections: 0, ...setup.options});
+    const provider = new AsyncKnexConnectionProvider(asyncPool);
+
+    try {
+        return await use({pgPool, asyncPool, provider});
+    } finally {
+        // Best effort: a leaked transaction lock makes flush() block forever.
+        await settlesWithin(asyncPool.flush(), 500);
+        await pgPool.end().catch(() => undefined);
+    }
+};
+
+/**
+ * Resolves to 'settled' or 'timed out' without ever leaving the promise
+ * unhandled, so a deadlock surfaces as a failed assertion instead of a hang.
+ */
+const settlesWithin = async (promise: PromiseLike<unknown>, milliseconds: number): Promise<'settled' | 'timed out'> => {
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+    const expiry = new Promise<'timed out'>(resolve => {
+        timer = setTimeout(() => resolve('timed out'), milliseconds);
+    });
+
+    try {
+        return await Promise.race([
+            promise.then(
+                () => 'settled' as const,
+                () => 'settled' as const,
+            ),
+            expiry,
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+const rejectionOf = async (promise: PromiseLike<unknown>): Promise<Error> => {
+    try {
+        await promise;
+    } catch (error) {
+        return error as Error;
+    }
+
+    throw new Error('Expected the promise to reject, but it resolved.');
+};
 
 describe('AsyncKnexConnectionProvider', () => {
     let pool: Pool;
@@ -945,4 +1017,409 @@ describe('AsyncKnexConnectionProvider', () => {
             expect(result[2].name).toBe('Vue');
         });
     });
+
+    // -- The property the package exists for: queries run on the connection the
+    // -- ambient async context has claimed, never on one Knex opened itself.
+
+    describe('ambient connection', () => {
+        test('a query runs on the connection the ambient context has claimed', async () => {
+            const claimed = await asyncPool.primary();
+            const claimedPid = (await claimed.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+
+            const viaKnex = await provider.connection().raw('SELECT pg_backend_pid() AS pid');
+
+            expect(viaKnex.rows[0].pid).toBe(claimedPid);
+        });
+
+        test('a write inside a transaction is visible on the transaction connection before the commit', async () => {
+            const trx = await provider.begin();
+
+            await trx(tableName).insert({name: 'Ambient', email: 'ambient@example.com'});
+
+            const onTheTransactionConnection = await extractPgConnection(trx).query(
+                `SELECT name FROM ${tableName}`,
+            );
+            expect(onTheTransactionConnection.rows).toEqual([{name: 'Ambient'}]);
+
+            const onAnotherConnection = await pool.query(`SELECT name FROM ${tableName}`);
+            expect(onAnotherConnection.rows).toEqual([]);
+
+            await provider.commit(trx);
+
+            expect((await pool.query(`SELECT name FROM ${tableName}`)).rows).toEqual([{name: 'Ambient'}]);
+        });
+
+        test('lazy queries inside a transaction run on the transaction connection', async () => {
+            await provider.runInTransaction(async () => {
+                const transactionConnection = extractPgConnection(provider.withTransaction());
+                const transactionPid = (await transactionConnection.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+
+                const lazyPid = (await provider.connection().raw('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+
+                expect(lazyPid).toBe(transactionPid);
+            });
+        });
+
+        test('a query built before a transaction joins it when it is awaited inside', async () => {
+            const insert = provider.connection()(tableName).insert({name: 'Late', email: 'late@example.com'});
+
+            await expect(
+                provider.runInTransaction(async () => {
+                    await insert;
+
+                    // Still invisible elsewhere, so the insert really joined the transaction.
+                    expect((await pool.query(`SELECT name FROM ${tableName}`)).rows).toEqual([]);
+
+                    throw new Error('changed my mind');
+                }),
+            ).rejects.toThrow('changed my mind');
+
+            expect(await provider.connection().select('*').from(tableName)).toEqual([]);
+        });
+    });
+
+    describe('knex pooling', () => {
+        test('the knex instance has no pool of its own', () => {
+            const client: Knex.Client = provider.connection().client;
+
+            expect(client.pool).toBeUndefined();
+        });
+
+        test('knex cannot open a connection behind the adapter', async () => {
+            const client: Knex.Client = provider.connection().client;
+
+            await expect(client.acquireConnection()).rejects.toThrow('Unable to acquire a connection');
+        });
+
+        test('a knex pool configuration supplied by the consumer is ignored', () => {
+            const configured = new AsyncKnexConnectionProvider(asyncPool, {knexConfig: {pool: {min: 2, max: 10}}});
+            const client: Knex.Client = configured.connection().client;
+
+            expect(client.pool).toBeUndefined();
+        });
+    });
+
+    describe('knex configuration', () => {
+        test('postProcessResponse and wrapIdentifier apply to routed queries', async () => {
+            const configured = new AsyncKnexConnectionProvider(asyncPool, {
+                knexConfig: {
+                    postProcessResponse: result =>
+                        Array.isArray(result) ? result.map(row => ({...row, source: 'configured'})) : result,
+                    wrapIdentifier: (value, originalImplementation) =>
+                        originalImplementation(value === 'displayName' ? 'name' : value),
+                },
+            });
+
+            await configured.connection()(tableName).insert({name: 'Configured', email: 'configured@example.com'});
+
+            const rows = await configured.connection()(tableName).select('displayName');
+
+            expect(rows).toEqual([{name: 'Configured', source: 'configured'}]);
+        });
+    });
+
+    describe('transaction lifecycle', () => {
+
+        test('a rollback through the ConnectionProvider interface hands its cause to the pool', async () => {
+            // Ported from duna-application d7563711e4: code typed against the interface could
+            // not pass the cause, so it never reached the pool or anything observing rollbacks.
+            const causes: unknown[] = [];
+            const rollback = asyncPool.rollback.bind(asyncPool);
+            asyncPool.rollback = async (connection, error?: unknown) => {
+                causes.push(error);
+
+                return rollback(connection, error);
+            };
+            const connections: ConnectionProvider = provider;
+            const cause = new Error('the unit of work failed');
+
+            const trx = await connections.begin();
+            await connections.rollback(trx, cause);
+
+            expect(causes).toEqual([cause]);
+            expect(connections.inTransaction()).toBe(false);
+        });
+
+        test('committing something that is not a transaction is refused', async () => {
+            await expect(provider.commit(provider.connection() as unknown as Transaction)).rejects.toThrow(
+                'Invalid transaction object - missing pg connection',
+            );
+        });
+
+        test('a synchronous throw from the callback rolls the transaction back', async () => {
+            const neverStarts = (): Promise<void> => {
+                throw new Error('never even started');
+            };
+
+            await expect(provider.runInTransaction(neverStarts)).rejects.toThrow('never even started');
+
+            expect(provider.inTransaction()).toBe(false);
+            expect(await provider.connection().select('*').from(tableName)).toEqual([]);
+        });
+
+        describe('a commit the server rejects', () => {
+            const deferredTable = 'async_knex_deferred';
+
+            beforeAll(async () => {
+                await pool.query(`
+                    DROP TABLE IF EXISTS ${deferredTable};
+                    CREATE TABLE ${deferredTable} (
+                        id SERIAL PRIMARY KEY,
+                        code TEXT NOT NULL,
+                        CONSTRAINT ${deferredTable}_code_unique UNIQUE (code) DEFERRABLE INITIALLY DEFERRED
+                    );
+                `);
+            });
+
+            afterAll(async () => {
+                await pool.query(`DROP TABLE IF EXISTS ${deferredTable}`);
+            });
+
+            beforeEach(async () => {
+                await pool.query(`TRUNCATE ${deferredTable} RESTART IDENTITY`);
+            });
+
+            it('surfaces the constraint violation that made the commit fail', async () => {
+                const error = await rejectionOf(
+                    provider.runInTransaction(async () => {
+                        await provider.connection()(deferredTable).insert([{code: 'same'}, {code: 'same'}]);
+                    }),
+                );
+
+                expect(error.message).toContain('duplicate key value violates unique constraint');
+            });
+        });
+
+        it('propagates the callback error when the rollback itself fails', async () => {
+            const brittleRelease: AsyncPgPoolOptions = {
+                releaseHookOnError: true,
+                onRelease: () => {
+                    throw new Error('resetting the session failed');
+                },
+            };
+
+            await withDedicatedStack({connections: 1, options: brittleRelease}, async ({provider: brittle}) => {
+                const error = await rejectionOf(
+                    brittle.runInTransaction(async () => {
+                        throw new Error('domain rule violated');
+                    }),
+                );
+
+                expect(error.message).toContain('domain rule violated');
+            });
+        });
+    });
+
+    describe('nested transactions', () => {
+        test('a nested runInTransaction commits once, at the outermost boundary', async () => {
+            await provider.runInTransaction(async () => {
+                await provider.connection()(tableName).insert({name: 'Outer', email: 'outer@example.com'});
+
+                await provider.runInTransaction(async () => {
+                    await provider.connection()(tableName).insert({name: 'Inner', email: 'inner@example.com'});
+                });
+
+                expect((await pool.query(`SELECT name FROM ${tableName}`)).rows).toEqual([]);
+                expect(provider.inTransaction()).toBe(true);
+            });
+
+            const rows = await pool.query(`SELECT name FROM ${tableName} ORDER BY name`);
+            expect(rows.rows).toEqual([{name: 'Inner'}, {name: 'Outer'}]);
+        });
+
+        test('a failure inside a nested runInTransaction rolls the outer transaction back', async () => {
+            await expect(
+                provider.runInTransaction(async () => {
+                    await provider.connection()(tableName).insert({name: 'Outer', email: 'outer@example.com'});
+
+                    await provider.runInTransaction(async () => {
+                        await provider.connection()(tableName).insert({name: 'Inner', email: 'inner@example.com'});
+
+                        throw new Error('inner step failed');
+                    });
+                }),
+            ).rejects.toThrow('inner step failed');
+
+            expect((await pool.query(`SELECT name FROM ${tableName}`)).rows).toEqual([]);
+        });
+
+        test('a nested failure the caller swallows keeps the inner writes, there are no savepoints', async () => {
+            await provider.runInTransaction(async () => {
+                await provider.connection()(tableName).insert({name: 'Outer', email: 'outer@example.com'});
+
+                await rejectionOf(
+                    provider.runInTransaction(async () => {
+                        await provider.connection()(tableName).insert({name: 'Inner', email: 'inner@example.com'});
+
+                        throw new Error('inner step failed');
+                    }),
+                );
+            });
+
+            const rows = await pool.query(`SELECT name FROM ${tableName} ORDER BY name`);
+            expect(rows.rows).toEqual([{name: 'Inner'}, {name: 'Outer'}]);
+        });
+
+    });
+
+    describe('connection release', () => {
+        const singleConnection = {connections: 1, options: {keepPrimaryConnection: false} as AsyncPgPoolOptions};
+
+        test('a constraint violation returns the connection to the pool', async () => {
+            await withDedicatedStack(singleConnection, async ({provider: tiny}) => {
+                await tiny.connection()(tableName).insert({name: 'First', email: 'clash@example.com'});
+
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    await expect(
+                        tiny.connection()(tableName).insert({name: 'Clash', email: 'clash@example.com'}),
+                    ).rejects.toThrow(/duplicate key value/);
+                }
+
+                expect(await tiny.connection()(tableName).count('* as total')).toEqual([{total: '1'}]);
+            });
+        });
+
+        test('a query for an unknown function returns the connection to the pool', async () => {
+            await withDedicatedStack(singleConnection, async ({provider: tiny}) => {
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    await expect(tiny.connection().raw('SELECT no_such_function()')).rejects.toThrow(/does not exist/);
+                }
+
+                await expect(tiny.connection().select('*').from(tableName)).resolves.toEqual([]);
+            });
+        });
+
+        test('a value of the wrong type returns the connection to the pool', async () => {
+            await withDedicatedStack(singleConnection, async ({provider: tiny}) => {
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    await expect(
+                        tiny.connection()(tableName).where('age', 'not-a-number').select('*'),
+                    ).rejects.toThrow(/invalid input syntax for type integer/);
+                }
+
+                await expect(tiny.connection().select('*').from(tableName)).resolves.toEqual([]);
+            });
+        });
+
+    });
+
+    describe('identifier handling', () => {
+        const hostileTable = `${tableName}"; DROP TABLE ${postsTable}; --`;
+
+        const postsTableStillExists = async (): Promise<boolean> => {
+            const result = await pool.query(`SELECT to_regclass('${postsTable}') IS NOT NULL AS present`);
+
+            return result.rows[0].present;
+        };
+
+        test('a caller-supplied table name is escaped as an identifier', async () => {
+            await expect(provider.connection()(hostileTable).select('*')).rejects.toThrow(/does not exist/);
+
+            expect(await postsTableStillExists()).toBe(true);
+        });
+
+        test('the transaction wrapper escapes table names the same way', async () => {
+            const trx = await provider.begin();
+
+            await expect(trx(hostileTable).select('*')).rejects.toThrow(/does not exist/);
+
+            await provider.rollback(trx);
+            expect(await postsTableStillExists()).toBe(true);
+        });
+
+        test('a caller-supplied column name is escaped in the compiled SQL', () => {
+            const sql = provider.connection()(tableName).select('name"; DROP TABLE x; --').toString();
+
+            expect(sql).toBe(`select "name""; DROP TABLE x; --" from "${tableName}"`);
+        });
+
+        test('a value is bound as a parameter instead of being interpolated', () => {
+            const compiled = provider.connection()(tableName).where('name', "'; DROP TABLE x; --").toSQL();
+
+            expect(compiled.sql).toBe(`select * from "${tableName}" where "name" = ?`);
+            expect(compiled.bindings).toEqual(["'; DROP TABLE x; --"]);
+        });
+
+        test('fn helpers are usable as query values', async () => {
+            const connection = provider.connection();
+
+            const rows = await connection(tableName)
+                .insert({name: 'Timed', email: 'timed@example.com', created_at: connection.fn.now()})
+                .returning('name');
+
+            expect(rows).toEqual([{name: 'Timed'}]);
+        });
+
+        test('a failing query keeps parameter values out of the error message', async () => {
+            await provider.connection()(tableName).insert({name: 'Existing', email: 'private-address@example.com'});
+
+            const error = await rejectionOf(
+                provider.connection()(tableName).insert({name: 'Duplicate', email: 'private-address@example.com'}),
+            );
+
+            expect(error.message).toContain('insert into');
+            expect(error.message).not.toContain('private-address@example.com');
+        });
+    });
+
+    describe('promise interface of a lazy query', () => {
+        test('catch() reports the query failure', async () => {
+            const caught = await provider
+                .connection()
+                .select('*')
+                .from('async_knex_absent_table')
+                .catch((error: Error) => error);
+
+            expect(caught).toBeInstanceOf(Error);
+        });
+
+        test('finally() runs after the query completed', async () => {
+            let completed = false;
+
+            const rows = await provider
+                .connection()
+                .select('*')
+                .from(tableName)
+                .finally(() => {
+                    completed = true;
+                });
+
+            expect(rows).toEqual([]);
+            expect(completed).toBe(true);
+        });
+
+        test('a raw query supports catch() and finally()', async () => {
+            let completed = false;
+
+            const caught = await provider
+                .connection()
+                .raw('SELECT no_such_function()')
+                .catch((error: Error) => error)
+                .finally(() => {
+                    completed = true;
+                });
+
+            expect(caught).toBeInstanceOf(Error);
+            expect(completed).toBe(true);
+        });
+    });
+
+    describe('shutdown', () => {
+        test('destroy() can be called more than once', async () => {
+            const disposable = new AsyncKnexConnectionProvider(asyncPool);
+
+            await disposable.destroy();
+
+            await expect(disposable.destroy()).resolves.toBeUndefined();
+        });
+
+        test('destroy() leaves the pool untouched, AsyncPgPool owns the connections', async () => {
+            const disposable = new AsyncKnexConnectionProvider(asyncPool);
+
+            await disposable.destroy();
+
+            await expect(disposable.connection().select('*').from(tableName)).resolves.toEqual([]);
+        });
+    });
+
 });
