@@ -462,6 +462,21 @@ describe('persisting an aggregate with snapshotting', () => {
         expect(await snapshots.retrieve(aggregateRootId)).toBeUndefined();
     });
 
+    test('does not leave a snapshot behind when writing the events fails', async () => {
+        const repository = new AggregateRootRepositoryWithSnapshotting<SnapshottingTestEvents>(
+            SnapshottedEntity,
+            snapshots,
+            messages,
+        );
+        const entity = await repository.retrieve(aggregateRootId);
+        entity.increment(7);
+        messages.failNextWrite(new Error('the event store is unavailable'));
+
+        await expect(repository.persist(entity)).rejects.toThrow('the event store is unavailable');
+
+        expect(await snapshots.retrieve(aggregateRootId)).toBeUndefined();
+    });
+
     test('keeps the recorded events on the aggregate when writing them fails', async () => {
         const repository = createRepository();
         const entity = await repository.retrieve(aggregateRootId);

@@ -175,6 +175,12 @@ const repository = new AggregateRootRepositoryWithSnapshotting<OrderStream>(
 await repository.persist(order, true); // second arg stores a snapshot
 ```
 
+`persist()` writes the events first and the snapshot second, in one transaction of the given
+transaction manager (a no-op one by default). When the snapshot store does not take part in that
+transaction, a failed snapshot write leaves a snapshot behind its stream, which `retrieve()` makes
+up for by replaying the events after it. Authoritative snapshots skip that replay, so they need the
+snapshot store to share the transaction.
+
 ### Aggregate Projections
 
 Automatically project aggregate state on persist:
