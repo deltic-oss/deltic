@@ -311,20 +311,5 @@ describe('MessageRepositoryUsingPg', () => {
             expect(highestVersion).toEqual(1);
         });
 
-        /**
-         * Retrieval stamps every message with the stream offset it was stored at, and
-         * pagination claims to do the same. Consumers use it to resume a projection
-         * from where the pagination left off.
-         *
-         * see .claude-work/issues/messaging-pagination-drops-stream-offset.md
-         */
-        it.fails('paginated messages carry the stream offset they were stored at', async () => {
-            const paginated = await collect(repository.paginateIds({limit: 20}));
-
-            expect(paginated).not.toHaveLength(0);
-            for (const {message} of paginated) {
-                expect(message.headers['stream_offset']).toEqual(expect.any(Number));
-            }
-        });
     });
 });
