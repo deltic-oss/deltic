@@ -222,12 +222,25 @@ A Knex-like query builder that defers connection acquisition. Supports all stand
 - Query starters: `select`, `insert`, `update`, `delete`, `from`, `into`, `table`
 - Aggregates: `count`, `sum`, `avg`, `min`, `max`, `first`, `pluck`
 - Modifiers: `where`, `orWhere`, `whereIn`, `whereNull`, `orderBy`, `limit`, `offset`, `groupBy`, `having`, `join`, `distinct`
+- Schema statements: `schema`, which runs on the ambient connection — inside the active
+  transaction when there is one, so the DDL commits or rolls back with it
 - Raw queries: `raw`
 - Inspection: `toSQL`, `toString`
 
 ### `Transaction`
 
-Similar to `Connection` but bound to a specific database connection for the transaction's duration. Queries execute immediately rather than lazily.
+Similar to `Connection` but bound to a specific database connection for the transaction's duration. Queries execute immediately rather than lazily. `trx.schema` runs schema statements inside the transaction:
+
+```typescript
+await db.runInTransaction(async () => {
+    await db.connection().schema.alterTable('reports', table => table.string('status'));
+    await db.connection()('reports').update({status: 'migrated'});
+}); // the column and the backfill commit, or roll back, together
+```
+
+DDL inside a transaction holds its locks — `ACCESS EXCLUSIVE` for most `ALTER TABLE`s — until the transaction ends, as Postgres always does.
+
+`migrate` and `seed` are not supported: knex's migrator and seeder acquire connections from the knex instance itself, which deliberately has no pool. Run migrations with a knex instance of their own.
 
 ## How It Works
 

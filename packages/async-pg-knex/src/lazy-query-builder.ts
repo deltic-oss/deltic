@@ -1,5 +1,5 @@
 import type {Knex} from 'knex';
-import type {AsyncPgPool} from '@deltic/async-pg-pool';
+import type {AsyncPgPool, Connection as PgConnection} from '@deltic/async-pg-pool';
 import type {BufferedCall, Connection} from './types.js';
 
 /**
@@ -39,6 +39,12 @@ export function createLazyConnection(knex: Knex, pool: AsyncPgPool): Connection 
         },
 
         get(_target, prop) {
+            // Schema statements run on the ambient connection like every other query. knex's own
+            // builder would ask knex for a connection, and the knex instance deliberately has no pool.
+            if (prop === 'schema') {
+                return createLazySchemaBuilder(knex, pool);
+            }
+
             // For raw queries
             if (prop === 'raw') {
                 return (sql: string, bindings?: Knex.RawBinding | Knex.RawBinding[]) => {
@@ -152,6 +158,28 @@ export function createLazyQueryBuilder(
 }
 
 /**
+ * Creates a schema builder that acquires its connection only when it runs. The builder is knex's
+ * own, so every schema method works as documented; only running it is redirected to the ambient
+ * connection — the transaction's when one is active, which makes the DDL part of it.
+ */
+function createLazySchemaBuilder(knex: Knex, pool: AsyncPgPool): Knex.SchemaBuilder {
+    const builder = knex.schema;
+    const run = builder.then.bind(builder) as () => Promise<unknown>;
+    const execute = (): Promise<unknown> => runOnAmbientConnection(pool, connection => {
+        builder.connection(connection as any);
+
+        return run();
+    });
+
+    return Object.assign(builder, {
+        then: (onFulfilled?: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
+            execute().then(onFulfilled, onRejected),
+        catch: (onRejected?: (reason: unknown) => unknown) => execute().catch(onRejected),
+        finally: (onFinally?: () => void) => execute().finally(onFinally),
+    });
+}
+
+/**
  * Creates a Proxy for raw queries that defers execution until awaited.
  */
 export function createLazyRawBuilder(
@@ -207,6 +235,27 @@ export function createLazyRawBuilder(
 }
 
 /**
+ * Runs work on the ambient connection: the active transaction's, or one resolved for this piece of
+ * work and released after it.
+ */
+async function runOnAmbientConnection<R>(
+    pool: AsyncPgPool,
+    work: (connection: PgConnection) => Promise<R>,
+): Promise<R> {
+    const connection = await pool.primary();
+    const inTransaction = pool.inTransaction();
+
+    try {
+        return await work(connection);
+    } finally {
+        // Release if not in transaction
+        if (!inTransaction) {
+            await pool.release(connection);
+        }
+    }
+}
+
+/**
  * Executes a buffered query by acquiring a connection, replaying calls, and executing.
  */
 async function executeQuery(
@@ -215,10 +264,7 @@ async function executeQuery(
     tableName: string | undefined,
     bufferedCalls: BufferedCall[],
 ): Promise<unknown> {
-    const connection = await pool.primary();
-    const inTransaction = pool.inTransaction();
-
-    try {
+    return runOnAmbientConnection(pool, async connection => {
         // Build the query
         const initial = tableName ? knex(tableName) : knex.queryBuilder();
 
@@ -227,12 +273,7 @@ async function executeQuery(
 
         // Bind to our connection and execute
         return await builder.connection(connection as any);
-    } finally {
-        // Release if not in transaction
-        if (!inTransaction) {
-            await pool.release(connection);
-        }
-    }
+    });
 }
 
 /**
@@ -244,16 +285,9 @@ async function executeRawQuery(
     sql: string,
     bindings?: Knex.RawBinding | Knex.RawBinding[],
 ): Promise<unknown> {
-    const connection = await pool.primary();
-    const inTransaction = pool.inTransaction();
-
-    try {
+    return runOnAmbientConnection(pool, async connection => {
         return await knex.raw(sql, bindings as any).connection(connection as any);
-    } finally {
-        if (!inTransaction) {
-            await pool.release(connection);
-        }
-    }
+    });
 }
 
 /**
