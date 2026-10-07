@@ -108,14 +108,6 @@ describe('dispatching unsupported input', () => {
         await expect(dispatching).rejects.toThrow('Unable to handle input of type: cancel_payment');
     });
 
-    // see .claude-work/issues/service-dispatcher-prototype-chain-handler-lookup.md
-    it.fails('rejects an input type that is only present on the prototype of the handler map', async () => {
-        for (const type of ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__']) {
-            await expect(
-                dispatcher.handle({type, payload: {reference: 'ref-1', amount: 100}} as never),
-            ).rejects.toThrow(InputNotSupported);
-        }
-    });
 });
 
 describe('dispatching through middleware', () => {

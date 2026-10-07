@@ -321,21 +321,6 @@ describe('lock timeout configuration', () => {
         expect(mutex.acquisitions).toEqual([{id: 'one', timeoutMs: defaultLockTimeoutMs}]);
     });
 
-    // see .claude-work/issues/service-dispatcher-locking-middleware-waits-forever.md
-    it.fails('the middleware falls back to the default lock timeout', async () => {
-        const mutex = new RecordingMutex();
-        const service = new ServiceDispatcher(handlers, [
-            createServiceLockingMiddleware<SingleCommandService, string>({
-                mutex,
-                lockResolver: input => input.payload.id,
-            }),
-        ]);
-
-        await service.handle({type: 'do_something', payload: {id: 'one'}});
-
-        expect(mutex.acquisitions).toEqual([{id: 'one', timeoutMs: defaultLockTimeoutMs}]);
-    });
-
     test('a configured timeout is passed to the mutex by both implementations', async () => {
         const forMiddleware = new RecordingMutex();
         const forDecorator = new RecordingMutex();

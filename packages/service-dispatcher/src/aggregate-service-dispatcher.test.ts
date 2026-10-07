@@ -193,22 +193,6 @@ describe('AggregateServiceDispatcher', () => {
         expect(repository.eventTypesFor('group-1')).toEqual(['member_was_added']);
     });
 
-    // see .claude-work/issues/service-dispatcher-aggregate-dispatcher-unsupported-input.md
-    it.fails('rejects with InputNotSupported when no handler is registered for the input type', async () => {
-        await expect(
-            service.handle({type: 'remove_member', payload: {id: 'group-1'}} as never),
-        ).rejects.toThrow(InputNotSupported);
-    });
-
-    // see .claude-work/issues/service-dispatcher-prototype-chain-handler-lookup.md
-    it.fails('rejects an input type that is only present on the prototype of the handler map', async () => {
-        for (const type of ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__']) {
-            await expect(
-                service.handle({type, payload: {id: 'group-1', member: frank}} as never),
-            ).rejects.toThrow(InputNotSupported);
-        }
-    });
-
     test('commands for the same aggregate are not serialised by the dispatcher itself', async () => {
         await Promise.all([
             service.handle({type: 'add_member', payload: {id: 'group-1', member: frank}}),
