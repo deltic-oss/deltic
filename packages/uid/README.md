@@ -83,6 +83,10 @@ isUserId('order_0193a5f8-...'); // false
 isUserId(42);                   // false
 ```
 
+The second argument checks the part after the prefix. Any `(id: string) => boolean` will do — a
+plain predicate such as `uuid`'s `validate`, `isValidUlid` from `@deltic/uid/ulid`, or your own. The
+result is an `IdValidator`: a type guard that narrows an unknown value to `PrefixedId<'user'>`.
+
 ### Database Conversion
 
 Convert between prefixed branded IDs and database representations:
@@ -96,6 +100,12 @@ const conversion = new PrefixedBrandedIdConversion('user', new NoIdConversion())
 conversion.toDatabase(userId);         // '0193a5f8-...' (prefix stripped)
 conversion.fromDatabase('0193a5f8-...'); // 'user_0193a5f8-...' (prefix added)
 ```
+
+`toDatabase` throws `UnexpectedIdPrefix` for an id that does not start with `{prefix}_`, such as a string
+cast to the wrong id type, rather than storing it under a mangled key.
+
+`toDatabase` and `fromDatabase` are bound to their instance, so they can be passed around as plain functions,
+for example `ids.map(conversion.toDatabase)`.
 
 ### ULID to UUID Conversion
 
@@ -115,7 +125,7 @@ conversion.fromDatabase(uuid);  // ULID string
 |------|-------------|
 | `PrefixedId<Prefix>` | Branded string type: `{prefix}_{id}` |
 | `IdFactory<Type>` | Function that generates an ID |
-| `IdValidator<Type>` | Type guard for ID validation |
+| `IdValidator<Type>` | Type guard for ID validation: `(id: unknown) => id is Type` |
 | `IdGenerator<Type>` | Interface with `generateId()` method |
 | `IdConversion<From, To>` | Interface with `toDatabase()` and `fromDatabase()` |
 
@@ -126,6 +136,7 @@ conversion.fromDatabase(uuid);  // ULID string
 | `PrefixedBrandedIdGenerator<Prefix>` | Generates prefixed branded IDs using a factory function |
 | `PrefixedBrandedIdConversion<Prefix, DatabaseType>` | Converts between prefixed IDs and database representation |
 | `NoIdConversion<Type>` | Pass-through conversion (no transformation) |
+| `UnexpectedIdPrefix` | Thrown by `PrefixedBrandedIdConversion.toDatabase` for an id without the configured prefix |
 
 ## License
 
