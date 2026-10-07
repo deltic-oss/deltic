@@ -387,6 +387,133 @@ describe.each([
         await processQueue.stop();
     });
 
+    test('keeps processing the remaining tasks when the error handler rejects', async () => {
+        const processed: string[] = [];
+        const processQueue = factory({
+            maxProcessing: 1,
+            onError: async ({skipCurrentTask}) => {
+                skipCurrentTask();
+                throw new Error('the error handler itself failed');
+            },
+            processor: async (task: string) => {
+                processed.push(task);
+
+                if (task === 'a') {
+                    throw new Error('cannot process this task');
+                }
+            },
+        });
+        const unhandled = await withoutProcessErrorHandlers('unhandledRejection', async () => {
+            processQueue.push('a').catch(() => {});
+            processQueue.push('b').catch(() => {});
+            await flushTicks(20);
+        });
+        expect(processed).toEqual(['a', 'b']);
+        expect(unhandled).toEqual([]);
+        await processQueue.stop();
+    });
+
+    test('treats an error handler that rejects before skipping the task as one that did not skip it', async () => {
+        const processed: string[] = [];
+        const failure = new Error('cannot process this task');
+        const processQueue = factory({
+            maxProcessing: 1,
+            onError: async () => {
+                throw new Error('the error handler itself failed');
+            },
+            processor: async (task: string) => {
+                processed.push(task);
+                throw failure;
+            },
+        });
+        const outcome = processQueue.push('a');
+        processQueue.push('b').catch(() => {});
+        await expect(outcome).rejects.toBe(failure);
+        await flushTicks();
+        expect(processed).toEqual(['a']);
+        expect(processQueue.isProcessing()).toBe(false);
+    });
+
+    test('does not leave an unhandled rejection behind when the error handler rejects', async () => {
+        const processQueue = factory({
+            maxProcessing: 1,
+            onError: async () => {
+                throw new Error('the error handler itself failed');
+            },
+            processor: async () => {
+                throw new Error('cannot process this task');
+            },
+        });
+        const unhandled = await withoutProcessErrorHandlers('unhandledRejection', async () => {
+            processQueue.push('a').catch(() => {});
+            await flushTicks(20);
+        });
+        expect(unhandled).toEqual([]);
+        await processQueue.stop();
+    });
+
+    test('keeps processing the remaining tasks when the onFinish hook rejects', async () => {
+        const processed: string[] = [];
+        const finishFailure = new Error('the finish hook failed');
+        const processQueue = factory({
+            maxProcessing: 1,
+            onError: async () => {},
+            onFinish: async (task: string) => {
+                if (task === 'a') {
+                    throw finishFailure;
+                }
+            },
+            processor: async (task: string) => {
+                processed.push(task);
+            },
+        });
+        const first = processQueue.push('a');
+        const second = processQueue.push('b');
+        await expect(first).rejects.toBe(finishFailure);
+        await expect(second).resolves.toEqual('b');
+        expect(processed).toEqual(['a', 'b']);
+        await processQueue.stop();
+    });
+
+    test('does not leave an unhandled rejection behind when the onDrained hook rejects', async () => {
+        const processQueue = factory({
+            onError: async () => {},
+            onDrained: async () => {
+                throw new Error('the drained hook failed');
+            },
+            processor: async () => {},
+        });
+        const unhandled = await withoutProcessErrorHandlers('unhandledRejection', async () => {
+            await processQueue.push('a');
+            await processQueue.stop();
+            await flushTicks();
+        });
+        expect(unhandled).toEqual([]);
+    });
+
+    test('keeps processing after the onDrained hook rejected', async () => {
+        const processed: string[] = [];
+        const processQueue = factory({
+            // one slot, so a task that never gives its slot back stops the queue
+            maxProcessing: 1,
+            onError: async () => {},
+            onDrained: async () => {
+                throw new Error('the drained hook failed');
+            },
+            processor: async (task: string) => {
+                processed.push(task);
+            },
+        });
+
+        await processQueue.push('a');
+        // let the queue drain, which runs the failing onDrained hook, before the next task arrives
+        await flushTicks();
+        await processQueue.push('b');
+        await processQueue.stop();
+
+        expect(processed).toEqual(['a', 'b']);
+    });
+
     test('a task occupies its slot until its onFinish hook has returned', async () => {
         const finishing = Promise.withResolvers<void>();
         const started: string[] = [];

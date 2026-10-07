@@ -139,7 +139,12 @@ export class ConcurrentProcessQueue<Task> implements ProcessQueue<Task> {
             await this.handleSuccess(item);
         } finally {
             if (this.backlog.length === 0) {
-                await this.config.onDrained(this.handle);
+                try {
+                    await this.config.onDrained(this.handle);
+                } catch {
+                    // A failing onDrained hook must neither stop the queue's bookkeeping nor surface as an
+                    // unhandled rejection; its failure is the consumer's to handle inside the hook.
+                }
             }
 
             this.inFlight.delete(item);
@@ -150,7 +155,14 @@ export class ConcurrentProcessQueue<Task> implements ProcessQueue<Task> {
     private async handleSuccess(item: QueuedTask<Task>): Promise<void> {
         this.remove(item);
 
-        await this.config.onFinish(item.task);
+        try {
+            await this.config.onFinish(item.task);
+        } catch (error) {
+            item.reject(error);
+
+            return;
+        }
+
         item.resolve(item.task);
     }
 
@@ -166,7 +178,11 @@ export class ConcurrentProcessQueue<Task> implements ProcessQueue<Task> {
             this.remove(item);
         };
 
-        await this.config.onError({error, task: item.task, queue: this.handle, skipCurrentTask});
+        try {
+            await this.config.onError({error, task: item.task, queue: this.handle, skipCurrentTask});
+        } catch {
+            // An error handler that fails has not dealt with the task, so the task is treated as not skipped.
+        }
 
         item.reject(error);
 

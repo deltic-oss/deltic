@@ -126,6 +126,16 @@ When the processor rejects or throws, the task's `push()` promise rejects with t
 - otherwise (`stopOnError: false`) the task is retried as soon as `onError` returns. To retry with a
   delay, wait inside `onError`; to give up, call `skipCurrentTask()`.
 
+### Failing Hooks
+
+A hook that throws or rejects never stops the queue's own bookkeeping:
+
+- a failing `onError` is treated as one that did not skip the task (unless it skipped it before
+  failing);
+- a failing `onFinish` rejects that task's `push()` promise with the hook's error; the task is not
+  retried;
+- a failure of `onDrained` is ignored — handle errors inside it if they matter.
+
 ## API Reference
 
 ### `ProcessQueue<Task>` (interface)
