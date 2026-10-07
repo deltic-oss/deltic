@@ -7,10 +7,9 @@ export interface IdFactory<Type extends string | number> {
     (): Type;
 }
 
-export interface IdValidator<Type extends string | number> {
-    (id: Type): boolean;
-}
-
+/**
+ * A type guard that tells whether an unknown value is a valid id.
+ */
 export interface IdValidator<Type extends string | number> {
     (id: unknown): id is Type;
 }
@@ -81,9 +80,14 @@ export class PrefixedBrandedIdConversion<
     }
 }
 
+/**
+ * A guard for prefixed ids: the value must be a string starting with `{prefix}_`, and the rest must
+ * satisfy `validator`. Any predicate will do for the rest — `validate` from `uuid`, `isValidUlid`, or
+ * a function of your own — as long as it takes the string and returns a boolean.
+ */
 export function prefixedIdValidator<Prefix extends string>(
     prefix: Prefix,
-    validator: IdValidator<string>,
+    validator: (id: string) => boolean,
 ): IdValidator<PrefixedId<Prefix>> {
     const fullPrefix = `${prefix}_`;
     const prefixLength = fullPrefix.length;

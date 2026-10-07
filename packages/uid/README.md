@@ -83,6 +83,10 @@ isUserId('order_0193a5f8-...'); // false
 isUserId(42);                   // false
 ```
 
+The second argument checks the part after the prefix. Any `(id: string) => boolean` will do — a
+plain predicate such as `uuid`'s `validate`, `isValidUlid` from `@deltic/uid/ulid`, or your own. The
+result is an `IdValidator`: a type guard that narrows an unknown value to `PrefixedId<'user'>`.
+
 ### Database Conversion
 
 Convert between prefixed branded IDs and database representations:
@@ -121,7 +125,7 @@ conversion.fromDatabase(uuid);  // ULID string
 |------|-------------|
 | `PrefixedId<Prefix>` | Branded string type: `{prefix}_{id}` |
 | `IdFactory<Type>` | Function that generates an ID |
-| `IdValidator<Type>` | Type guard for ID validation |
+| `IdValidator<Type>` | Type guard for ID validation: `(id: unknown) => id is Type` |
 | `IdGenerator<Type>` | Interface with `generateId()` method |
 | `IdConversion<From, To>` | Interface with `toDatabase()` and `fromDatabase()` |
 
