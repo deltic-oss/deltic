@@ -8,5 +8,5 @@ declare const brand: unique symbol;
  * the type, trusting the value has been properly vetted.
  */
 export type Branded<T, TBrand extends string> = T & {
-    [brand]: TBrand;
-};
+    [brand]: 'prevents forging without casting';
+} & (string extends TBrand ? unknown : {[I in TBrand as `__brand_${I}`]: true});

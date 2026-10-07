@@ -75,4 +75,32 @@ describe('branded', () => {
 
     });
 
+    describe('layering a second brand onto an already branded type', () => {
+        type Verified<T> = Branded<T, 'Verified'>;
+        type IsNever<T> = [T] extends [never] ? true : false;
+
+        test('yields an inhabitable type when a refinement brand is layered on', () => {
+            const layeredBrandIsNever: IsNever<Verified<UserId>> = false;
+            const verified = 'user_1' as Verified<UserId>;
+            const userId: UserId = verified;
+
+            expect(layeredBrandIsNever).toBe(false);
+            expect(userId).toBe('user_1');
+        });
+
+        test('keeps a doubly branded value out of an unrelated brand', () => {
+            const verified = 'user_1' as Verified<UserId>;
+            // @ts-expect-error a verified UserId is still not an OrderId
+            const orderId: OrderId = verified;
+
+            expect(orderId).toBe('user_1');
+        });
+
+        test('refuses a value that carries only one of the layered brands', () => {
+            // @ts-expect-error a UserId that was never verified is not a verified UserId
+            const verified: Verified<UserId> = 'user_1' as UserId;
+
+            expect(verified).toBe('user_1');
+        });
+    });
 });
