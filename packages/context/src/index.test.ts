@@ -21,24 +21,6 @@ interface MyContext {
     value: string;
 }
 
-/**
- * A one-shot synchronisation point, used to interleave concurrent flows
- * deterministically instead of relying on timing.
- */
-type Checkpoint = {
-    readonly reached: Promise<void>;
-    reach(): void;
-};
-
-function createCheckpoint(): Checkpoint {
-    let reach: () => void = () => {};
-    const reached = new Promise<void>(resolve => {
-        reach = resolve;
-    });
-
-    return {reached, reach: () => reach()};
-}
-
 describe.each([
     ['static', () => new ContextStoreUsingMemory<MyContext>()],
     ['async_hooks', () => new AsyncLocalStorage<Partial<MyContext>>()],
@@ -716,7 +698,7 @@ describe('composeContextSlotsForTesting', () => {
 });
 
 // ============================================================================
-// Overlapping flows
+// ContextStoreUsingMemory
 // ============================================================================
 
 interface RequestContext {
@@ -724,48 +706,13 @@ interface RequestContext {
     user_id: string;
 }
 
-describe('ContextStoreUsingMemory with overlapping flows', () => {
+describe('ContextStoreUsingMemory', () => {
     let store: ContextStoreUsingMemory<RequestContext>;
     let context: Context<RequestContext>;
 
     beforeEach(() => {
         store = new ContextStoreUsingMemory<RequestContext>();
         context = new Context<RequestContext>(store);
-    });
-
-    async function interleaveTwoFlows(observed: Record<string, string | undefined>): Promise<void> {
-        const secondEntered = createCheckpoint();
-        const firstObserved = createCheckpoint();
-
-        const first = context.run(async () => {
-            await secondEntered.reached;
-            observed.first = context.get('tenant_id');
-            firstObserved.reach();
-        }, {tenant_id: 'tenant-a'});
-
-        const second = context.run(async () => {
-            secondEntered.reach();
-            await firstObserved.reached;
-            observed.second = context.get('tenant_id');
-        }, {tenant_id: 'tenant-b'});
-
-        await Promise.all([first, second]);
-    }
-
-    // see .claude-work/issues/context-memory-store-leaks-between-concurrent-flows.md
-    it.fails('keeps overlapping flows from observing each other values', async () => {
-        const observed: Record<string, string | undefined> = {};
-
-        await interleaveTwoFlows(observed);
-
-        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
-    });
-
-    // see .claude-work/issues/context-memory-store-leaks-between-concurrent-flows.md
-    it.fails('leaves no context behind once every flow has settled', async () => {
-        await interleaveTwoFlows({});
-
-        expect(store.getStore()).toBeUndefined();
     });
 
     test('sequential flows are scoped correctly', async () => {

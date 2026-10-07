@@ -20,6 +20,10 @@ export interface ContextStore<C extends ContextData<C>> {
     run<R>(store: Partial<C>, callback: () => Promise<R>): Promise<R>;
 }
 
+/**
+ * Keeps one context for the whole process, so it is only sound for one flow at a time: flows that
+ * overlap read and overwrite the same context.
+ */
 export class ContextStoreUsingMemory<C extends ContextData<C>> implements ContextStore<C> {
     constructor(private context?: Partial<C> | undefined) {
     }

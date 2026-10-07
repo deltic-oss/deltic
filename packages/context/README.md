@@ -64,6 +64,9 @@ const store = new AsyncLocalStorage<Partial<RequestContext>>();
 const context = new Context<RequestContext>(store);
 ```
 
+`ContextStoreUsingMemory` keeps one context for the whole process, so it is only sound for one flow
+at a time, such as a script or a test: flows that overlap read and overwrite the same context.
+
 ### Context Slots
 
 For composable, typed context with default values:
