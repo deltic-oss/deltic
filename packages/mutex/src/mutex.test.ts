@@ -14,26 +14,7 @@ const lockId2 = 'lock-id-2';
 let pool: Pool;
 let asyncPool: AsyncPgPool;
 
-/**
- * Behaviour where an implementation is known to deviate from the contract every
- * other implementation honours. Each flag turns the matching contract test into
- * an expected failure, so the suite documents the divergence and turns red again
- * as soon as the implementation is fixed. No implementation carries a flag right
- * now — the ones that existed have been fixed — but the mechanism stays, so a
- * future divergence is documented here instead of weakening the contract.
- */
-interface KnownDivergences {
-    wakesWaitersOfOtherLockIds?: true;
-    requiresUsableTimeout?: true;
-    zeroTimeoutNeverExpires?: true;
-    forgetsReleasedLocks?: true;
-}
-
-type ImplementationUnderTest = [
-    name: string,
-    factory: () => DynamicMutex<string>,
-    divergences: KnownDivergences,
-];
+type ImplementationUnderTest = [name: string, factory: () => DynamicMutex<string>];
 
 /**
  * Releases every lock a test could still be holding, whichever implementation
@@ -55,11 +36,10 @@ const releaseEveryLock = async (mutex: DynamicMutex<string>, ids: string[]): Pro
 };
 
 const implementations: ImplementationUnderTest[] = [
-    ['Memory', () => new MutexUsingMemory<string>(), {}],
+    ['Memory', () => new MutexUsingMemory<string>()],
     [
         'MultiMutex',
         () => new MultiMutex<string>([new MutexUsingMemory<string>(), new MutexUsingMemory<string>()]),
-        {},
     ],
     [
         'MutexUsingPostgres - primary',
@@ -69,7 +49,6 @@ const implementations: ImplementationUnderTest[] = [
                 converter: new Crc32LockIdConverter({base: 0, range: 10_000}),
                 mode: 'primary',
             }),
-        {},
     ],
     [
         'MutexUsingPostgres - fresh',
@@ -79,11 +58,10 @@ const implementations: ImplementationUnderTest[] = [
                 converter: new Crc32LockIdConverter({base: 0, range: 10_000}),
                 mode: 'fresh',
             }),
-        {},
     ],
 ];
 
-describe.each(implementations)('Mutex using %s', (_name, factory, divergences) => {
+describe.each(implementations)('Mutex using %s', (_name, factory) => {
     let mutex: DynamicMutex<string>;
 
     beforeAll(() => {
@@ -263,8 +241,7 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         await mutex.unlock(lockId1);
     });
 
-    const handsLockToWaiterOfSameLockId = divergences.wakesWaitersOfOtherLockIds ? test.fails : test;
-    handsLockToWaiterOfSameLockId('a released lock is only handed to a waiter for that same lock id', async () => {
+    test('a released lock is only handed to a waiter for that same lock id', async () => {
         await mutex.lock(lockId1, 100);
         await mutex.lock(lockId2, 100);
 
@@ -290,8 +267,7 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(grantedToTheWrongWaiter).toEqual(false);
     });
 
-    const acquiresWithoutTimeout = divergences.requiresUsableTimeout ? test.fails : test;
-    acquiresWithoutTimeout('a free lock can be acquired without providing a timeout', async () => {
+    test('a free lock can be acquired without providing a timeout', async () => {
         const outcome = await mutex.lock(lockId1).then(
             () => 'acquired',
             error => error,
@@ -302,8 +278,7 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(outcome).toEqual('acquired');
     });
 
-    const acquiresWithUnusableTimeout = divergences.requiresUsableTimeout ? test.fails : test;
-    acquiresWithUnusableTimeout('a free lock can be acquired when the timeout is not a number', async () => {
+    test('a free lock can be acquired when the timeout is not a number', async () => {
         // a misconfigured timeout such as DELTIC_LOCK_TIMEOUT_MS=5s arrives here as NaN
         const outcome = await mutex.lock(lockId1, Number.NaN).then(
             () => 'acquired',
@@ -315,8 +290,7 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(outcome).toEqual('acquired');
     });
 
-    const zeroTimeoutDoesNotWait = divergences.zeroTimeoutNeverExpires ? test.fails : test;
-    zeroTimeoutDoesNotWait('a lock request with a zero timeout does not wait for the holder', async () => {
+    test('a lock request with a zero timeout does not wait for the holder', async () => {
         await mutex.lock(lockId1, 50);
         const attempt = mutex.lock(lockId1, 0).then(
             () => 'acquired',
@@ -332,8 +306,7 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(outcome).toEqual('rejected');
     });
 
-    const releasingTwiceIsTyped = divergences.forgetsReleasedLocks ? test.fails : test;
-    releasingTwiceIsTyped('releasing an already released lock reports a typed failure', async () => {
+    test('releasing an already released lock reports a typed failure', async () => {
         await mutex.lock(lockId1, 50);
         await mutex.unlock(lockId1);
 
