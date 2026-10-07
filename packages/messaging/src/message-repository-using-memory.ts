@@ -87,35 +87,32 @@ export class MessageRepositoryUsingMemory<Stream extends StreamDefinition> imple
         const {limit, afterId, whichMessage = 'last'} = options;
         let left = limit;
         let shouldYield = afterId === undefined;
-        const collected = new Set<Stream['aggregateRootId']>();
+        const streamsOfTenant = this.messages.get(this.tenantContext.resolve()) ?? [];
 
-        for (const group of this.messages.values()) {
-            for (const [aggregateId, messages] of group) {
-                if (collected.has(aggregateId) || messages.length === 0) {
-                    continue;
-                }
-                collected.add(aggregateId);
+        for (const [aggregateId, messages] of streamsOfTenant) {
+            if (messages.length === 0) {
+                continue;
+            }
 
-                if (!shouldYield) {
-                    if (aggregateId === afterId) {
-                        shouldYield = true;
-                    }
-
-                    continue;
+            if (!shouldYield) {
+                if (aggregateId === afterId) {
+                    shouldYield = true;
                 }
 
-                const message = messages.at(whichMessage === 'first' ? 0 : -1)!;
+                continue;
+            }
 
-                yield {
-                    id: aggregateId,
-                    version: message.headers['aggregate_root_version'] ?? 0,
-                    message,
-                };
-                left--;
+            const message = messages.at(whichMessage === 'first' ? 0 : -1)!;
 
-                if (left === 0) {
-                    return;
-                }
+            yield {
+                id: aggregateId,
+                version: message.headers['aggregate_root_version'] ?? 0,
+                message,
+            };
+            left--;
+
+            if (left === 0) {
+                return;
             }
         }
     }

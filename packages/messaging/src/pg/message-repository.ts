@@ -189,15 +189,24 @@ export class MessageRepositoryUsingPg<Stream extends StreamDefinition> implement
 
     async *paginateIds(options: IdPaginationOptions<Stream>): AsyncGenerator<AggregateIdWithStreamOffset<Stream>> {
         const {limit, afterId, whichMessage = 'last'} = options;
+        const tenantId = this.tenantContext?.mustResolve();
         const connection = await this.pool.primary();
 
-        const values: any[] = [limit];
-        let whereClause = '';
+        const values: unknown[] = [];
+        const whereClauses: string[] = [];
+
+        if (tenantId !== undefined) {
+            values.push(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
+            whereClauses.push(`tenant_id = $${values.length}`);
+        }
 
         if (afterId !== undefined) {
-            values.unshift(afterId);
-            whereClause = 'WHERE aggregate_root_id > $1';
+            values.push(afterId);
+            whereClauses.push(`aggregate_root_id > $${values.length}`);
         }
+
+        values.push(limit);
+        const whereClause = whereClauses.length === 0 ? '' : `WHERE ${whereClauses.join(' AND ')}`;
 
         const {rows} = await connection.query<MessageRecord<Stream>>(
             `

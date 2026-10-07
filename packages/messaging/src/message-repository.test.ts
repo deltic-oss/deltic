@@ -272,5 +272,27 @@ describe.each([
             expect(highestVersion).toEqual(1);
         });
 
+        /**
+         * Every other read on this repository is scoped to the tenant in context.
+         * Pagination is what rebuild and migration jobs use to walk over all streams,
+         * so a job running for one tenant must not see another tenant's streams or the
+         * message payloads that come with them.
+         */
+        test('it only paginates over ids of the tenant in context', async () => {
+            const otherTenantsId = generateId();
+            tenantContext.use(secondTenantId);
+            await repository.persist(otherTenantsId, [
+                createMessage('first', 'belongs to the other tenant', {
+                    aggregate_root_version: 1,
+                    aggregate_root_id: otherTenantsId,
+                }),
+            ]);
+            tenantContext.use(firstTenantId);
+
+            const paginated = await collect(repository.paginateIds({limit: 100}));
+
+            expect(paginated.map(m => m.id)).not.toContain(otherTenantsId);
+            expect(paginated).toHaveLength(ids.length);
+        });
     });
 });
