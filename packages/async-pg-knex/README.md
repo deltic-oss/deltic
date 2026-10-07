@@ -223,7 +223,16 @@ A Knex-like query builder that defers connection acquisition. Supports all stand
 - Aggregates: `count`, `sum`, `avg`, `min`, `max`, `first`, `pluck`
 - Modifiers: `where`, `orWhere`, `whereIn`, `whereNull`, `orderBy`, `limit`, `offset`, `groupBy`, `having`, `join`, `distinct`
 - Raw queries: `raw`
+- Identifiers and helpers: `ref` (escapes a dynamic column or table name), `fn`
+- A fresh builder: `queryBuilder()`, which runs on the ambient connection like every other query
 - Inspection: `toSQL`, `toString`
+
+```typescript
+const connection = db.connection();
+
+// a caller-chosen column, escaped as an identifier rather than interpolated into SQL
+const rows = await connection('users').select(connection.ref(sortColumn)).orderBy(sortColumn);
+```
 
 ### `Transaction`
 

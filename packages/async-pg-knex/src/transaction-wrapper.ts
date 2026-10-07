@@ -1,6 +1,7 @@
 import type {Knex} from 'knex';
 import type {Connection as PgConnection} from '@deltic/async-pg-pool';
 import type {Transaction} from './types.js';
+import {knexMember} from './lazy-query-builder.js';
 
 /**
  * Symbol used to store the pg connection on transaction wrappers.
@@ -64,9 +65,14 @@ export function createTransactionWrapper(knex: Knex, pgConnection: PgConnection)
                 return undefined;
             }
 
+            // A fresh builder runs in the transaction, like every other query from here.
+            if (prop === 'queryBuilder') {
+                return () => knex.queryBuilder().connection(pgConnection as any);
+            }
+
             // For known knex-level properties, delegate directly
             if (typeof prop === 'string' && KNEX_DELEGATE_PROPERTIES.has(prop)) {
-                return (knex as any)[prop];
+                return knexMember(knex, prop);
             }
 
             // For symbols, delegate to knex

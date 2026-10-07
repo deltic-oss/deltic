@@ -1319,6 +1319,38 @@ describe('AsyncKnexConnectionProvider', () => {
             expect(compiled.bindings).toEqual(["'; DROP TABLE x; --"]);
         });
 
+        test('builds an escaped identifier for a dynamic column with ref()', async () => {
+            const connection = provider.connection();
+            await connection(tableName).insert({name: 'Referenced', email: 'referenced@example.com'});
+
+            const rows = await connection(tableName).select(connection.ref('name'));
+
+            expect(rows).toEqual([{name: 'Referenced'}]);
+        });
+
+        test('a transaction builds escaped identifiers with ref() too', async () => {
+            const trx = await provider.begin();
+            await trx(tableName).insert({name: 'Referenced', email: 'referenced@example.com'});
+
+            const rows = await trx(tableName).select(trx.ref('name').as('label'));
+
+            await provider.rollback(trx);
+            expect(rows).toEqual([{label: 'Referenced'}]);
+        });
+
+        test('queryBuilder() starts a query that runs on the ambient connection', async () => {
+            await provider.runInTransaction(async () => {
+                await provider.connection()(tableName).insert({name: 'Pending', email: 'pending@example.com'});
+
+                const fromLazy = await provider.connection().queryBuilder().select('name').from(tableName);
+                const fromTransaction = await provider.withTransaction().queryBuilder().select('name').from(tableName);
+
+                expect(fromLazy).toEqual([{name: 'Pending'}]);
+                expect(fromTransaction).toEqual([{name: 'Pending'}]);
+                expect((await pool.query(`SELECT name FROM ${tableName}`)).rows).toEqual([]);
+            });
+        });
+
         test('fn helpers are usable as query values', async () => {
             const connection = provider.connection();
 
