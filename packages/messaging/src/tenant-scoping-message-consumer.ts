@@ -11,7 +11,11 @@ export class TenantScopingMessageConsumer<Stream extends StreamDefinition> imple
         const tenantId = message.headers['tenant_id'] as string | undefined;
         const originalTenant = this.tenantContext.resolve();
         this.tenantContext.use(tenantId);
-        await this.consumer.consume(message);
-        this.tenantContext.use(originalTenant);
+
+        try {
+            await this.consumer.consume(message);
+        } finally {
+            this.tenantContext.use(originalTenant);
+        }
     }
 }
