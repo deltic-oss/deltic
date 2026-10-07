@@ -6,6 +6,7 @@ import {
     PrefixedBrandedIdConversion,
     PrefixedBrandedIdGenerator,
     prefixedIdValidator,
+    UnexpectedIdPrefix,
 } from './index.js';
 import {v7 as uuidV7, validate as isValidUuid} from 'uuid';
 
@@ -128,6 +129,12 @@ describe('PrefixedBrandedIdConversion', () => {
         expect(serialConversion.fromDatabase(42)).toBe('invoice_42');
     });
 
+    test('it rejects ids that do not carry the configured prefix', () => {
+        const orderIds = new PrefixedBrandedIdGenerator('order', uuidV7);
+        const foreignId = orderIds.generateId() as unknown as PersonId;
+
+        expect(() => conversion.toDatabase(foreignId)).toThrow(UnexpectedIdPrefix);
+    });
 });
 
 describe('prefixedIdValidator', () => {
