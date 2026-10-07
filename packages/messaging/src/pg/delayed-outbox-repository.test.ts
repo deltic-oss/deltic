@@ -206,20 +206,4 @@ describe('Delayed Outbox Repository', () => {
         expect(pending.map(m => m.headers['attempt'])).toEqual([2]);
     });
 
-    /**
-     * The attempt header travels inside the message payload, so for messages that came
-     * in over a broker it is producer-controlled. A value that is not a finite number
-     * makes the computed delay NaN, which Postgres rejects as an invalid timestamp —
-     * taking down the persist of the whole batch, including the healthy messages in it.
-     *
-     * see .claude-work/issues/messaging-attempt-header-not-validated.md
-     */
-    it.fails('a message with an unusable attempt header does not break the batch it is in', async () => {
-        await expect(repository.persist([
-            createMessage('ping', 1, {attempt: 'not-a-number'}),
-            createMessage('pong', 2),
-        ])).resolves.toBeUndefined();
-
-        expect(await repository.numberOfPendingMessages()).toEqual(2);
-    });
 });

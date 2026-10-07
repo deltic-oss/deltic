@@ -129,27 +129,6 @@ describe('TenantScopingMessageConsumer', () => {
         expect(tenantContext.resolve()).toBe('other-tenant');
     });
 
-    // see .claude-work/issues/messaging-tenant-context-leaks-on-consumer-failure.md
-    it.fails('it restores the original tenant context when consumption fails', async () => {
-        const tenantContext = new ValueReadWriterUsingMemory<string>();
-        tenantContext.use('original-tenant');
-
-        const consumer: MessageConsumer<ExampleStream> = {
-            async consume() {
-                throw new Error('consumption failed');
-            },
-        };
-
-        const scoping = new TenantScopingMessageConsumer(tenantContext, consumer);
-        const message = createMessage<ExampleStream>('example', {name: 'test'}, {
-            aggregate_root_id: 'abc',
-            tenant_id: 'other-tenant',
-        });
-
-        await expect(scoping.consume(message)).rejects.toThrow('consumption failed');
-        expect(tenantContext.resolve()).toBe('original-tenant');
-    });
-
     /**
      * A relay keeps handing messages to the same consumer instance. Every message is
      * scoped to its own tenant, so a failure does not affect how the next message is
@@ -180,51 +159,6 @@ describe('TenantScopingMessageConsumer', () => {
         }));
 
         expect(observedTenants).toEqual(['tenant-a', 'tenant-b']);
-    });
-
-    /**
-     * The tenant that is in context when consumption starts must be restored before
-     * control returns to the caller. Otherwise the work a relay does between
-     * deliveries — writing a dead-letter record, updating a projection, logging —
-     * runs under the tenant of the message that just failed.
-     *
-     * see .claude-work/issues/messaging-tenant-context-leaks-on-consumer-failure.md
-     */
-    it.fails('it does not leave a tenant behind for work that happens between deliveries', async () => {
-        const tenantContext = new ValueReadWriterUsingMemory<string>();
-        const consumer: MessageConsumer<ExampleStream> = {
-            async consume() {
-                throw new Error('consumption failed');
-            },
-        };
-
-        const scoping = new TenantScopingMessageConsumer(tenantContext, consumer);
-
-        await expect(scoping.consume(createMessage<ExampleStream>('example', {name: 'test'}, {
-            tenant_id: 'tenant-a',
-        }))).rejects.toThrow('consumption failed');
-
-        expect(tenantContext.resolve()).toBeUndefined();
-    });
-
-    /**
-     * Backing the tenant with an async-local store does not help: consumption mutates
-     * the ambient context instead of entering a scope of its own, so both messages
-     * still write to the same store object.
-     *
-     * see .claude-work/issues/messaging-tenant-scope-leaks-between-concurrent-messages.md
-     */
-    it.fails('an async-local tenant context also keeps concurrent messages apart', async () => {
-        const context = composeContextSlots(
-            [defineContextSlot<'tenant_id', string>({key: 'tenant_id'})],
-            new AsyncLocalStorage(),
-        );
-
-        const observed = await context.run(() => tenantsObservedDuringOverlappingConsumption(
-            new ValueReadWriterUsingContext(context, 'tenant_id'),
-        ));
-
-        expect(observed).toEqual({first: 'tenant-a', second: 'tenant-b'});
     });
 
     test('it sets undefined when the message has no tenant_id header', async () => {

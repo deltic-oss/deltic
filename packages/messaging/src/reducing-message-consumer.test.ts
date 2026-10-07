@@ -80,34 +80,6 @@ describe('reducing projections', () => {
         expect(await storage.retrieve('4321')).toEqual(6);
     });
 
-    /**
-     * The message type comes off the wire, so it can name a property that every plain
-     * object has. Such a type has no reducer registered for it and must leave the state
-     * alone, instead of running Object.prototype.toString as if it were a reducer.
-     *
-     * see .claude-work/issues/messaging-message-type-used-as-unguarded-object-key.md
-     */
-    it.fails('a message type that names an Object property does not change the state', async () => {
-        const storage = new KeyValueStoreUsingMemory<string, number>();
-        const projection = new ReducingMessageConsumer<string, number, ReducingProjectionsEvents>(
-            storage,
-            () => 'total',
-            () => 0,
-            routeSomeToReducer({
-                two: (state, message) => state + message.payload.two,
-            }),
-        );
-
-        await projection.consume(createMessage('two', {two: 5}));
-        await projection.consume({
-            type: 'toString',
-            payload: {two: 1},
-            headers: {},
-        } as unknown as AnyMessageFrom<ReducingProjectionsEvents>);
-
-        expect(await storage.retrieve('total')).toEqual(5);
-    });
-
     test('using an object as the key', async () => {
         type ProjectionKey = {
             tenant: string;

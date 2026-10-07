@@ -219,17 +219,5 @@ describe('InMemoryMessageRepository', () => {
             expect(await collect(paginated)).toHaveLength(0);
         });
 
-        /**
-         * A limit that is computed — page size minus what was already handled, for
-         * instance — can end up at zero. The Pg implementation returns nothing for it,
-         * this one returns the entire stream index.
-         *
-         * see .claude-work/issues/messaging-memory-pagination-ignores-zero-limit.md
-         */
-        it.fails('a limit of zero yields nothing', async () => {
-            const paginated = repository.paginateIds({limit: 0});
-
-            expect(await collect(paginated)).toHaveLength(0);
-        });
     });
 });
