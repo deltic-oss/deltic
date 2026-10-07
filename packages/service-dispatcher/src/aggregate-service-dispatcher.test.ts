@@ -193,6 +193,28 @@ describe('AggregateServiceDispatcher', () => {
         expect(repository.eventTypesFor('group-1')).toEqual(['member_was_added']);
     });
 
+    test('rejects with InputNotSupported when no handler is registered for the input type', async () => {
+        await expect(
+            service.handle({type: 'remove_member', payload: {id: 'group-1'}} as never),
+        ).rejects.toThrow(InputNotSupported);
+    });
+
+    test('does not retrieve the aggregate for an input type it cannot handle', async () => {
+        await expect(
+            service.handle({type: 'remove_member', payload: {id: 'group-1'}} as never),
+        ).rejects.toThrow(InputNotSupported);
+
+        expect(repository.retrievals).toEqual([]);
+    });
+
+    test('rejects an input type that is only present on the prototype of the handler map', async () => {
+        for (const type of ['toString', 'constructor', 'valueOf', 'hasOwnProperty', '__proto__']) {
+            await expect(
+                service.handle({type, payload: {id: 'group-1', member: frank}} as never),
+            ).rejects.toThrow(InputNotSupported);
+        }
+    });
+
     test('commands for the same aggregate are not serialised by the dispatcher itself', async () => {
         await Promise.all([
             service.handle({type: 'add_member', payload: {id: 'group-1', member: frank}}),

@@ -1,4 +1,4 @@
-import type {InputForServiceOfType, Service, ServiceStructure} from './index.js';
+import {type InputForServiceOfType, resolveHandler, type Service, type ServiceStructure} from './index.js';
 import type {AggregateRepository, AggregateStream} from '@deltic/event-sourcing';
 
 export * from './index.js';
@@ -32,7 +32,7 @@ export class AggregateServiceDispatcher<
     async handle<T extends keyof Definition>(
         input: InputForServiceOfType<Definition, T>
     ): Promise<Definition[T]['response']> {
-        const handler = this.handlers[input.type];
+        const handler = resolveHandler(this.handlers, input.type);
         const aggregate = await this.repository.retrieve(this.findAggregateId(input.payload));
 
         try {

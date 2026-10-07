@@ -144,7 +144,9 @@ interface ServiceMiddleware<S> {
 
 ### `InputNotSupported`
 
-Thrown when no handler is registered for the input type.
+Thrown by `ServiceDispatcher` and `AggregateServiceDispatcher` when no handler is registered for the
+input type. Only the handler map's own properties count as handlers, so an input type such as
+`toString` is refused too. `AggregateServiceDispatcher` refuses before it retrieves the aggregate.
 
 ## License
 
