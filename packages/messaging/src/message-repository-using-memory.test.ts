@@ -219,5 +219,15 @@ describe('InMemoryMessageRepository', () => {
             expect(await collect(paginated)).toHaveLength(0);
         });
 
+        /**
+         * A limit that is computed — page size minus what was already handled, for
+         * instance — can end up at zero. That is an empty page, as it is for the Pg
+         * implementation.
+         */
+        test('a limit of zero yields nothing', async () => {
+            const paginated = repository.paginateIds({limit: 0});
+
+            expect(await collect(paginated)).toHaveLength(0);
+        });
     });
 });
