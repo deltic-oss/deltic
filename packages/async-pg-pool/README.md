@@ -11,7 +11,7 @@ The standard `pg.Pool` gives you connections and releases them. It doesn't help 
 - **Primary connections** - Reusing a single connection across an HTTP request for advisory locks or sequential operations
 - **Context-based isolation** - Preventing tenant context leakage in multi-tenant applications
 
-`AsyncPgPool` wraps a `pg.Pool` and adds context-aware connection management. Connections are tracked per async context via `AsyncLocalStorage`, so transactions, primary connections, and tenant state are automatically scoped:
+`AsyncPgPool` wraps a `pg.Pool` and adds context-aware connection management. Connections are tracked per context scope, so transactions, primary connections, and tenant state follow the logical flow they belong to — per request or per message once the pool is given an `AsyncLocalStorage`-backed context (see [the default context is for a single flow](#the-default-context-is-for-a-single-flow)):
 
 ```typescript
 const asyncPool = new AsyncPgPool(pgPool, {
@@ -184,8 +184,12 @@ const asyncPool = new AsyncPgPool(pgPool, {
 #### Constructor
 
 ```typescript
-new AsyncPgPool(pool: Pool, options?: AsyncPgPoolOptions)
+new AsyncPgPool(pool: Pool, options?: AsyncPgPoolOptions, context?: Context<AsyncPgPoolContextSlot>)
 ```
+
+`context` decides what a scope is. Without it, the pool keeps one process-wide, memory-backed scope,
+which is only safe for a single flow; pass an `AsyncLocalStorage`-backed context for anything that
+serves concurrent flows (see [Context Isolation](#context-isolation)).
 
 #### Options
 
@@ -307,7 +311,7 @@ Extends pg's `PoolClient` (without `release`) and supports `Symbol.asyncDispose`
 
 ## How It Works
 
-`AsyncPgPool` uses `@deltic/context` (backed by `AsyncLocalStorage`) to track connection state per async execution context. Each context maintains:
+`AsyncPgPool` keeps its connection state in a `@deltic/context` slot, so it is scoped the way the context is: per async execution context with an `AsyncLocalStorage`-backed context, once for the whole process with the default one. Each scope maintains:
 
 - A **primary connection** for reuse across calls
 - A **shared transaction** connection when a transaction is active
