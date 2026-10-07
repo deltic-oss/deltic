@@ -263,7 +263,6 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         await mutex.unlock(lockId1);
     });
 
-    // see .claude-work/issues/mutex-memory-waiter-queue-not-keyed-by-lock-id.md
     const handsLockToWaiterOfSameLockId = divergences.wakesWaitersOfOtherLockIds ? test.fails : test;
     handsLockToWaiterOfSameLockId('a released lock is only handed to a waiter for that same lock id', async () => {
         await mutex.lock(lockId1, 100);
@@ -291,7 +290,6 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(grantedToTheWrongWaiter).toEqual(false);
     });
 
-    // see .claude-work/issues/mutex-pg-lock-requires-usable-timeout.md
     const acquiresWithoutTimeout = divergences.requiresUsableTimeout ? test.fails : test;
     acquiresWithoutTimeout('a free lock can be acquired without providing a timeout', async () => {
         const outcome = await mutex.lock(lockId1).then(
@@ -304,7 +302,6 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(outcome).toEqual('acquired');
     });
 
-    // see .claude-work/issues/mutex-pg-lock-requires-usable-timeout.md
     const acquiresWithUnusableTimeout = divergences.requiresUsableTimeout ? test.fails : test;
     acquiresWithUnusableTimeout('a free lock can be acquired when the timeout is not a number', async () => {
         // a misconfigured timeout such as DELTIC_LOCK_TIMEOUT_MS=5s arrives here as NaN
@@ -318,7 +315,6 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(outcome).toEqual('acquired');
     });
 
-    // see .claude-work/issues/mutex-pg-zero-timeout-never-expires.md
     const zeroTimeoutDoesNotWait = divergences.zeroTimeoutNeverExpires ? test.fails : test;
     zeroTimeoutDoesNotWait('a lock request with a zero timeout does not wait for the holder', async () => {
         await mutex.lock(lockId1, 50);
@@ -336,7 +332,6 @@ describe.each(implementations)('Mutex using %s', (_name, factory, divergences) =
         expect(outcome).toEqual('rejected');
     });
 
-    // see .claude-work/issues/mutex-pg-unlock-keeps-stale-connection.md
     const releasingTwiceIsTyped = divergences.forgetsReleasedLocks ? test.fails : test;
     releasingTwiceIsTyped('releasing an already released lock reports a typed failure', async () => {
         await mutex.lock(lockId1, 50);

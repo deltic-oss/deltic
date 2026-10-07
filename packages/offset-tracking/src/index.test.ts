@@ -174,7 +174,6 @@ describe.each([
 
     /**
      * Documents the absence of a monotonicity guard.
-     * see .claude-work/issues/offset-tracking-offsets-can-move-backwards.md
      */
     test('it moves a tracker backwards when a lower offset is stored', async () => {
         // given

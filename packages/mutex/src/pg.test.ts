@@ -223,7 +223,6 @@ describe('MutexUsingPostgres', () => {
         expect(stolen).toEqual(false);
     });
 
-    // see .claude-work/issues/mutex-crc32-collisions-alias-unrelated-locks.md
     it('refuses to release a lock name that was never acquired', async () => {
         const asyncPool = createPool();
         const mutex = createMutex(asyncPool);

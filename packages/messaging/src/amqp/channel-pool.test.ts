@@ -120,8 +120,6 @@ describe('AMQPChannelPool', () => {
      * close() closes the channels it has idling, so anything handed out afterwards would be
      * unusable: publishing on it fails with "channel closed" instead of with the error
      * that says the pool is done.
-     *
-     * see .claude-work/issues/messaging-channel-pool-hands-out-closed-channels.md
      */
     test('requesting a channel after close throws when the pool still holds idle channels', async () => {
         const pool = new AMQPChannelPool(createFakeConnectionProvider(), {min: 1});
