@@ -9,7 +9,7 @@ import {
 import type {MessageRepository, StreamDefinition} from '@deltic/messaging';
 import type {OutboxRepository} from '@deltic/messaging/outbox';
 import {MessageRepositoryUsingPg, type MessageRepositoryUsingPgOptions} from '@deltic/messaging/pg/message-repository';
-import {OutboxRepositoryUsingPg} from '@deltic/messaging/pg/outbox-repository';
+import {OutboxRepositoryUsingPg, type OutboxNotifyConfiguration} from '@deltic/messaging/pg/outbox-repository';
 import type {TransactionManager} from '@deltic/transaction-manager';
 
 import type {
@@ -39,6 +39,15 @@ export interface PostgresProviderOptions<Stream extends StreamDefinition = Strea
      * Allows customizing ID conversion, tenant context, etc.
      */
     snapshotRepositoryOptions?: Partial<SnapshotRepositoryUsingPgOptions<Stream & AggregateStreamWithSnapshotting<any>>>;
+
+    /**
+     * How the outbox repository announces new messages, which lets an outbox relay react instead of
+     * waiting for its poll interval. Defaults to `{style: 'both'}`: every outbox write sends
+     * `NOTIFY outbox_publish__<outboxTable>`, the channel `setupOutboxRelay` listens on, and
+     * `NOTIFY outbox_publish, '<outboxTable>'`, the channel and payload `setupMultiOutboxRelay`
+     * listens for. Both are delivered on commit only. `{style: 'none'}` relies on polling alone.
+     */
+    outboxNotification?: OutboxNotifyConfiguration;
 }
 
 /**
@@ -83,7 +92,11 @@ export class InfrastructureProviderUsingPostgres<Stream extends StreamDefinition
     ): OutboxRepository<S> {
         const pool = container.resolve(this.options.pool);
 
-        return new OutboxRepositoryUsingPg<S>(pool, options.tableName);
+        return new OutboxRepositoryUsingPg<S>(
+            pool,
+            options.tableName,
+            this.options.outboxNotification ?? {style: 'both'},
+        );
     }
 
     createTransactionManager(container: DependencyContainer): TransactionManager {

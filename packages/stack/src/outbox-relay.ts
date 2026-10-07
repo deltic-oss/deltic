@@ -58,8 +58,9 @@ export interface OutboxRelayConfig<Stream extends StreamDefinition> {
 
     /**
      * PostgreSQL LISTEN channel name for reactive notification-based triggering.
-     * Must match the channel used by the outbox repository's NOTIFY statement.
-     * For OutboxRepositoryUsingPg, this is typically `outbox_publish__<tableName>`.
+     * Must match the channel used by the outbox repository's NOTIFY statement. The outbox
+     * repository of `InfrastructureProviderUsingPostgres` notifies `outbox_publish__<tableName>`
+     * by default.
      */
     channelName: string;
 
@@ -239,7 +240,8 @@ export interface MultiOutboxRelayConfig {
 
     /**
      * PostgreSQL LISTEN channel name for the central notification channel.
-     * Defaults to 'outbox_publish'.
+     * Defaults to 'outbox_publish', which the outbox repository of
+     * `InfrastructureProviderUsingPostgres` notifies by default.
      */
     channelName?: string;
 
