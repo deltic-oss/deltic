@@ -20,7 +20,8 @@ export interface AsyncPgDriverOptions {
  *
  * This driver implements Kysely's Driver interface, routing all connection
  * management through AsyncPgPool. Connections are acquired via
- * `pool.primary()` and released conditionally based on transaction state.
+ * `pool.primary()` and released after each query, except the active
+ * transaction's connection, which its commit or rollback hands back.
  *
  * The `beginTransaction`, `commitTransaction`, and `rollbackTransaction`
  * methods throw to prevent Kysely from issuing transaction commands that
@@ -28,6 +29,13 @@ export interface AsyncPgDriverOptions {
  * lifecycle management must go through AsyncPgPool or the provider.
  */
 export class AsyncPgDriver implements Driver {
+    /**
+     * The connections handed out as the active transaction's connection. Whether a query's
+     * connection is handed back is decided when it is acquired: a transaction that begins or ends
+     * while the query runs says nothing about the connection the query was given.
+     */
+    readonly #transactionConnections = new WeakSet<DatabaseConnection>();
+
     constructor(
         private readonly pool: AsyncPgPool,
         private readonly options: AsyncPgDriverOptions = {},
@@ -39,7 +47,13 @@ export class AsyncPgDriver implements Driver {
 
     async acquireConnection(): Promise<DatabaseConnection> {
         const pgConnection = await this.pool.primary();
-        return new AsyncPgConnection(pgConnection, {cursor: this.options.cursor});
+        const connection = new AsyncPgConnection(pgConnection, {cursor: this.options.cursor});
+
+        if (this.pool.inTransaction() && this.pool.withTransaction() === pgConnection) {
+            this.#transactionConnections.add(connection);
+        }
+
+        return connection;
     }
 
     async beginTransaction(_connection: DatabaseConnection, _settings: TransactionSettings): Promise<void> {
@@ -55,9 +69,12 @@ export class AsyncPgDriver implements Driver {
     }
 
     async releaseConnection(connection: DatabaseConnection): Promise<void> {
-        if (!this.pool.inTransaction()) {
-            await this.pool.release((connection as AsyncPgConnection)[pgConnectionSymbol]);
+        // The transaction's connection is handed back by its commit or rollback, not per query.
+        if (this.#transactionConnections.delete(connection)) {
+            return;
         }
+
+        await this.pool.release((connection as AsyncPgConnection)[pgConnectionSymbol]);
     }
 
     async destroy(): Promise<void> {

@@ -300,7 +300,7 @@ Under the hood, the provider creates a custom Kysely `Dialect` with a custom `Dr
 1. **`connection()`** returns a Kysely instance whose driver resolves connections via `pool.primary()`
 2. **When a query executes**, the driver calls `pool.primary()` to get the current connection (respecting transaction context)
 3. **The query runs** on the resolved connection via `connection.query()`
-4. **The connection is released** back to the pool (unless in a transaction)
+4. **The connection is released** back to the pool — unless the driver was handed the active transaction's connection, which only that transaction's commit or rollback hands back. That is decided when the connection is acquired, so a transaction that begins or ends while the query runs does not change what happens to the query's connection
 
 **Transactions** work differently: `begin()` creates a new Kysely instance with an inline dialect that always returns the same dedicated connection. All queries on that instance execute on the transaction connection until commit or rollback.
 
