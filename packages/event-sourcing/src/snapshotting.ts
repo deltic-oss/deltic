@@ -98,7 +98,10 @@ export class AggregateRootRepositoryWithSnapshotting<
             };
 
             await this.snapshots.store(snapshot);
-            await super.persist(aggregateRoot as any);
+
+            if (aggregateRoot.hasUnreleasedEvents()) {
+                await this.storeRecordedEvents(aggregateRoot);
+            }
 
             if (!alreadyInTransaction) {
                 await this.transactions.commit();
@@ -109,6 +112,8 @@ export class AggregateRootRepositoryWithSnapshotting<
             }
             throw error;
         }
+
+        aggregateRoot.releaseEvents();
     }
 
     async retrieve(id: Stream['aggregateRootId']): Promise<Stream['aggregateRoot']> {
