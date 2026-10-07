@@ -57,14 +57,15 @@ export class EventSourcedAggregateRepository<
         return this.factory.reconstituteFromEvents(id, this.messageRepository.retrieveAllUntilVersion(id, version + 1));
     }
 
+    /**
+     * The aggregate keeps its events until they are stored and the transaction this repository
+     * opened has committed, so a rejected persist() can be retried with the same aggregate.
+     */
     async persist(aggregateRoot: Stream['aggregateRoot']): Promise<void> {
-        const recordedEvents = aggregateRoot.releaseEvents();
-
-        if (recordedEvents.length === 0) {
+        if (!aggregateRoot.hasUnreleasedEvents()) {
             return;
         }
 
-        const messages = this.messageDecorator.decorate(recordedEvents);
         const alreadyInTransaction = this.transactionManager.inTransaction();
 
         if (!alreadyInTransaction) {
@@ -72,8 +73,7 @@ export class EventSourcedAggregateRepository<
         }
 
         try {
-            await this.messageRepository.persist(aggregateRoot.aggregateRootId, messages);
-            await this.messageDispatcher?.send(...messages);
+            await this.storeRecordedEvents(aggregateRoot);
         } catch (e) {
             if (!alreadyInTransaction) {
                 await this.transactionManager.rollback();
@@ -84,6 +84,18 @@ export class EventSourcedAggregateRepository<
         if (!alreadyInTransaction) {
             await this.transactionManager.commit();
         }
+
+        aggregateRoot.releaseEvents();
+    }
+
+    /**
+     * Writes and dispatches the recorded events, leaving them on the aggregate.
+     */
+    protected async storeRecordedEvents(aggregateRoot: Stream['aggregateRoot']): Promise<void> {
+        const messages = this.messageDecorator.decorate(aggregateRoot.peekEvents());
+
+        await this.messageRepository.persist(aggregateRoot.aggregateRootId, messages);
+        await this.messageDispatcher?.send(...messages);
     }
 }
 
