@@ -1,6 +1,6 @@
 import type {InputForServiceOfType, NextFunction, ServiceStructure} from './index.js';
 import type {DynamicMutex, LockValue} from '@deltic/mutex';
-import type {LockIDResolver, LockSkipDetector} from './shared-for-locking.js';
+import {defaultLockTimeoutMs, type LockIDResolver, type LockSkipDetector} from './shared-for-locking.js';
 
 export * from './shared-for-locking.js';
 
@@ -8,7 +8,7 @@ export function createServiceLockingMiddleware<S extends ServiceStructure<S>, Lo
     mutex,
     lockResolver,
     shouldSkip = () => false,
-    timeoutMs,
+    timeoutMs = defaultLockTimeoutMs,
 }: {
     mutex: DynamicMutex<LockId>;
     shouldSkip?: LockSkipDetector<S>;

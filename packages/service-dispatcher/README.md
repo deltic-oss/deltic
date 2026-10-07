@@ -98,6 +98,9 @@ const lockedService = new ServiceLocking<UserService, string>(service, {
 });
 ```
 
+Both wait at most `timeoutMs` for the lock and then reject with `UnableToAcquireLock`. Without
+`timeoutMs`, both use `defaultLockTimeoutMs`: 5000, or the value of `DELTIC_LOCK_TIMEOUT_MS`.
+
 ### Aggregate Service
 
 For event-sourced aggregates, use the aggregate service dispatcher that auto-persists aggregates with unreleased events:
