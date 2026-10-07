@@ -319,7 +319,7 @@ Because connections flow through `AsyncPgPool`, you get all its features:
 ```typescript
 const asyncPool = new AsyncPgPool(pgPool, {
     // Run on every connection claim
-    onClaim: client => client.query(`SET app.tenant_id = '${tenantId}'`),
+    onClaim: client => client.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]),
     // Run on every connection release
     onRelease: 'RESET app.tenant_id',
     // Keep connections warm
