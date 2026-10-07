@@ -78,7 +78,7 @@ await transactionManager.runInIsolatedTransaction(async () => {
 
 ### `NoopTransactionManager`
 
-A no-op implementation that runs callbacks directly without transaction management. Useful for testing or non-transactional contexts.
+A no-op implementation that runs callbacks directly without transaction management. Useful for testing or non-transactional contexts. Like the real implementations, it reports a failing unit of work as a rejected promise, also when the callback throws before it returns one.
 
 ## License
 

@@ -279,4 +279,15 @@ describe('NoopTransactionManager', () => {
         expect(lifecycle()).toEqual([]);
     });
 
+    it('reports a unit of work that fails before it returns a promise as a rejection', async () => {
+        const manager = new NoopTransactionManager();
+        const failure = new Error('the unit of work failed before it returned a promise');
+        const unitOfWork = (): Promise<void> => {
+            throw failure;
+        };
+
+        await expect(manager.runInTransaction(unitOfWork)).rejects.toBe(failure);
+        await expect(manager.runInIsolation(unitOfWork)).rejects.toBe(failure);
+        await expect(manager.runInIsolatedTransaction(unitOfWork)).rejects.toBe(failure);
+    });
 });
