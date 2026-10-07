@@ -311,5 +311,21 @@ describe('MessageRepositoryUsingPg', () => {
             expect(highestVersion).toEqual(1);
         });
 
+        /**
+         * Retrieval stamps every message with the stream offset it was stored at, and
+         * pagination stamps the same offset on the message it hands out. Consumers use it
+         * to resume a projection from where the pagination left off.
+         */
+        test('paginated messages carry the stream offset they were stored at', async () => {
+            const paginated = await collect(repository.paginateIds({limit: 20}));
+
+            expect(paginated).not.toHaveLength(0);
+            for (const {id, message} of paginated) {
+                const stored = await collect(repository.retrieveAllForAggregate(id));
+
+                expect(message.headers['stream_offset']).toBeDefined();
+                expect(message.headers['stream_offset']).toEqual(stored.at(-1)?.headers['stream_offset']);
+            }
+        });
     });
 });
