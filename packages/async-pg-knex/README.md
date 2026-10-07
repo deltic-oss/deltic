@@ -121,10 +121,20 @@ try {
     
     await db.commit(trx);
 } catch (error) {
-    await db.rollback(trx);
+    await db.rollback(trx, error);
     throw error;
 }
 ```
+
+Hand the error to `rollback()`: it is forwarded to the pool, so whatever observes rollbacks — a
+transaction manager that counts or logs them — learns why the transaction was rolled back. The
+`ConnectionProvider` interface accepts it too, so code typed against the interface can forward it.
+
+A second `begin()` waits for the active transaction to be finalised — that is what lets two
+concurrent flows share a context. It also means a flow must never `await` a transaction it would
+itself have to finalise, because nothing can break that deadlock. Compose with `runInTransaction`,
+which joins the active transaction instead of opening a second one, and set the pool's
+`transactionWaitTimeoutMs` to turn a mistaken wait into an error rather than a hang.
 
 #### Using `runInTransaction`
 
