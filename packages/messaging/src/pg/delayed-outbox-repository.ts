@@ -1,7 +1,7 @@
 import type {BackOffStrategy} from '@deltic/backoff';
 import {type Clock, SystemClock} from '@deltic/clock';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
-import type {AnyMessageFrom, MessagesFrom, StreamDefinition} from '../index.js';
+import type {AnyMessageFrom, HeaderValue, MessagesFrom, StreamDefinition} from '../index.js';
 import {messageWithHeaders} from '../helpers.js';
 import {
     OUTBOX_CONSUMED_HEADER_KEY,
@@ -77,7 +77,7 @@ export class DelayedOutboxRepositoryUsingPg<Stream extends StreamDefinition> imp
         }
 
         messages = messages.map(message => {
-            const currentAttempt = Number(message.headers['attempt'] ?? 0);
+            const currentAttempt = previousAttempts(message.headers['attempt']);
             const delayUntil = this.clock.now() + this.backoff.backOff(currentAttempt);
 
             return messageWithHeaders(message, {
@@ -147,4 +147,15 @@ export class DelayedOutboxRepositoryUsingPg<Stream extends StreamDefinition> imp
             ).rows[0].count,
         );
     }
+}
+
+/**
+ * How often the message was written to the delayed outbox before. The `attempt` header travels inside
+ * the message, so it can carry another producer's value; anything that is not a non-negative integer
+ * counts as a first write, which keeps the delay of the whole batch computable.
+ */
+function previousAttempts(header: HeaderValue): number {
+    const attempt = typeof header === 'number' || typeof header === 'string' ? Number(header) : Number.NaN;
+
+    return Number.isSafeInteger(attempt) && attempt >= 0 ? attempt : 0;
 }
