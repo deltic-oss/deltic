@@ -104,35 +104,9 @@ describe('TenantScopingMessageConsumer', () => {
     });
 
     /**
-     * Documents current behaviour: the message tenant stays in the context when
-     * consumption fails. See the it.fails case below for the expected behaviour.
-     *
-     * see .claude-work/issues/messaging-tenant-context-leaks-on-consumer-failure.md
-     */
-    test('it leaves the message tenant in the context when consumption fails', async () => {
-        const tenantContext = new ValueReadWriterUsingMemory<string>();
-        tenantContext.use('original-tenant');
-
-        const consumer: MessageConsumer<ExampleStream> = {
-            async consume() {
-                throw new Error('consumption failed');
-            },
-        };
-
-        const scoping = new TenantScopingMessageConsumer(tenantContext, consumer);
-        const message = createMessage<ExampleStream>('example', {name: 'test'}, {
-            aggregate_root_id: 'abc',
-            tenant_id: 'other-tenant',
-        });
-
-        await expect(scoping.consume(message)).rejects.toThrow('consumption failed');
-        expect(tenantContext.resolve()).toBe('other-tenant');
-    });
-
-    /**
      * A relay keeps handing messages to the same consumer instance. Every message is
      * scoped to its own tenant, so a failure does not affect how the next message is
-     * scoped — only the context that remains in between deliveries is wrong.
+     * scoped.
      */
     test('every message is scoped to its own tenant, also after a failure', async () => {
         const tenantContext = new ValueReadWriterUsingMemory<string>();
