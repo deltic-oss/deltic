@@ -121,3 +121,44 @@ describe.each([
     });
 
 });
+
+describe.each([
+    ['AggregateRootUsingHandlerMap', ExampleUsingHandlerMap],
+    ['AggregateRootUsingReducerMap', ExampleUsingReducerMap],
+] as const)('looking up an event handler in %s', (_name, aggregate) => {
+    type AggregateType = typeof aggregate.prototype;
+    type Stream = ExampleStream<AggregateType>;
+
+    const eventOfUnknownType = (type: string): AnyMessageFrom<Stream> =>
+        ({
+            type,
+            payload: {value: 'from the future'},
+            headers: {aggregate_root_id: aggregateRootId, aggregate_root_version: 1},
+        }) as unknown as AnyMessageFrom<Stream>;
+
+    const replay = (...messages: MessagesFrom<Stream>): Promise<AggregateType> =>
+        aggregate.reconstituteFromEvents(aggregateRootId, streamOf(messages)) as Promise<AggregateType>;
+
+    test('ignores an event type that matches a key inherited from the object prototype', async () => {
+        const replayed = await replay(eventOfUnknownType('__proto__'));
+
+        expect(replayed.aggregateRootVersion()).toEqual(1);
+    });
+});
+
+describe('looking up an event handler in AggregateRootUsingReducerMap', () => {
+    type Stream = ExampleStream<ExampleUsingReducerMap>;
+
+    const replay = (...messages: MessagesFrom<Stream>): Promise<ExampleUsingReducerMap> =>
+        ExampleUsingReducerMap.reconstituteFromEvents(aggregateRootId, streamOf(messages));
+
+    test('leaves the state alone for an event type that matches a method on the object prototype', async () => {
+        const replayed = await replay({
+            type: 'toString',
+            payload: {value: 'from the future'},
+            headers: {aggregate_root_id: aggregateRootId, aggregate_root_version: 1},
+        } as unknown as AnyMessageFrom<Stream>);
+
+        expect(replayed.timesMemberWasAdded).toEqual(0);
+    });
+});
