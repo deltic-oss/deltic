@@ -57,8 +57,6 @@ describe('AMQPConnectionProvider', () => {
      * once its attempt ceiling is passed. That used to escape the retry loop without
      * settling the promise handed to the caller: connection() never resolved or rejected,
      * and close() — which waits for the pending waiters — never returned either.
-     *
-     * see .claude-work/issues/messaging-bounded-backoff-hangs-connection-provider.md
      */
     test('a backoff strategy that gives up rejects the pending connection', async () => {
         const provider = new AMQPConnectionProvider(unreachableUrl, {

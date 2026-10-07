@@ -1131,7 +1131,6 @@ describe('@deltic/dependency-injection', () => {
             expect(container.resolve(loggerKey)).toBe(logger);
         });
 
-        // see .claude-work/issues/dependency-injection-concurrent-cleanup-runs-every-hook-twice.md
         test('runs every shutdown hook once when cleanup is called concurrently', async () => {
             const closed = Promise.withResolvers<void>();
             container.register('relay', {
