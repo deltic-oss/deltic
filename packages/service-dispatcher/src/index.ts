@@ -26,6 +26,25 @@ export type ServiceHandlers<Service extends ServiceStructure<Service>> = {
 
 export class InputNotSupported extends Error {}
 
+/**
+ * The handler registered for an input type, or `InputNotSupported`. Only own properties count, so an
+ * input type such as `toString` or `constructor` cannot resolve to a member of `Object.prototype`.
+ *
+ * @internal
+ */
+export function resolveHandler<Handlers extends object, Type extends keyof Handlers>(
+    handlers: Handlers,
+    type: Type,
+): Handlers[Type] {
+    const handler = Object.hasOwn(handlers, type) ? handlers[type] : undefined;
+
+    if (typeof handler !== 'function') {
+        throw new InputNotSupported(`Unable to handle input of type: ${String(type)}`);
+    }
+
+    return handler;
+}
+
 export interface Service<Structure extends ServiceStructure<Structure>> {
     handle<T extends keyof Structure>(input: InputForServiceOfType<Structure, T>): Promise<Structure[T]['response']> | Structure[T]['response'];
 }
@@ -60,11 +79,7 @@ export class ServiceDispatcher<S extends ServiceStructure<S>> implements Service
     private async process<T extends keyof S>(
         input: InputForServiceOfType<S, T>,
     ): Promise<S[T]['response']> {
-        const handler = this.handlers[input.type];
-
-        if (!handler) {
-            throw new InputNotSupported(`Unable to handle input of type: ${input.type.toString()}`);
-        }
+        const handler = resolveHandler(this.handlers, input.type);
 
         return await handler(input.payload);
     }
