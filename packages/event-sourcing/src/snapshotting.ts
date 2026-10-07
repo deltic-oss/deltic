@@ -105,7 +105,7 @@ export class AggregateRootRepositoryWithSnapshotting<
             }
         } catch (error) {
             if (!alreadyInTransaction) {
-                await this.transactions.rollback();
+                await this.transactions.rollback(error);
             }
             throw error;
         }
