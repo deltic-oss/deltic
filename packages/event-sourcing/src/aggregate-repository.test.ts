@@ -186,6 +186,36 @@ describe('EventSourcedAggregateRepository', () => {
             expect(transactions.rollbackCauses).toEqual([failure]);
         });
 
+        test('keeps the recorded events on the aggregate when writing them fails', async () => {
+            const repository = createRepository();
+            const order = Order.place(orderId, 'frank', 100);
+            messages.failNextWrite(new Error('connection reset by peer'));
+
+            await expect(repository.persist(order)).rejects.toThrow('connection reset by peer');
+
+            // A caller that retries the write expects the events to still be there.
+            expect(order.hasUnreleasedEvents()).toBe(true);
+
+            await repository.persist(order);
+
+            expect(await collect(events.retrieveAllForAggregate(orderId))).toHaveLength(1);
+            expect(order.hasUnreleasedEvents()).toBe(false);
+        });
+
+        test('keeps the recorded events on the aggregate when committing fails', async () => {
+            const failingCommit = new (class extends RecordingTransactionManager {
+                async commit(): Promise<void> {
+                    await super.commit();
+                    throw new Error('could not serialize access');
+                }
+            })();
+            const repository = createRepository({transactions: failingCommit});
+            const order = Order.place(orderId, 'frank', 100);
+
+            await expect(repository.persist(order)).rejects.toThrow('could not serialize access');
+
+            expect(order.hasUnreleasedEvents()).toBe(true);
+        });
     });
 
     describe('version integrity', () => {

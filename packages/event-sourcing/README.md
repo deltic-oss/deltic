@@ -145,6 +145,15 @@ const order = Order.place('order-1', 99.99);
 await repository.persist(order);
 ```
 
+`persist()` writes and dispatches the recorded events in a transaction of its own, or in the
+caller's when one is already open. The aggregate keeps its events until they are stored and the
+repository's own transaction has committed: when `persist()` rejects, the events are still on the
+aggregate and persisting it again retries the write. Inside a caller's transaction the events are
+released once written, so a later rollback of that transaction does not put them back. Without a
+real transaction manager (`NoopTransactionManager`), a failure after the write (while dispatching,
+for instance) leaves events that are both stored and still on the aggregate, and a retry appends
+them again.
+
 ### Snapshotting
 
 Speed up reconstitution by storing aggregate state snapshots:
@@ -198,7 +207,7 @@ await repository.persist(order);
 
 | Method | Description |
 |--------|-------------|
-| `releaseEvents()` | Returns and clears unreleased events |
+| `releaseEvents()` | Returns and clears unreleased events; repositories call it once the events are stored |
 | `peekEvents()` | Returns a copy of unreleased events |
 | `hasUnreleasedEvents()` | Whether there are uncommitted events |
 | `aggregateRootVersion()` | Current version number |
