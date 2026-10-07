@@ -83,6 +83,32 @@ export async function runReusingAmbientTransaction<R>(
 }
 
 /**
+ * Whether the promise is still unsettled after the microtask queue has been given
+ * ample room to drain. Deterministic: no wall-clock waiting is involved.
+ */
+async function isStillPending(promise: Promise<unknown>): Promise<boolean> {
+    let settled = false;
+    const settling = () => {
+        settled = true;
+    };
+    // both outcomes are observed, so a rejection is never left unhandled
+    void promise.then(settling, settling);
+
+    for (let hop = 0; hop < 25; hop++) {
+        await Promise.resolve();
+    }
+
+    return !settled;
+}
+
+function countOf(
+    lifecycle: readonly TransactionLifecycleOperation[],
+    operation: TransactionLifecycleOperation,
+): number {
+    return lifecycle.filter(recorded => recorded === operation).length;
+}
+
+/**
  * The behaviour every `TransactionManager` implementation has to provide. Feed it
  * any number of implementations; the expectations that only apply to managers
  * with real transaction state are skipped for the others.
@@ -91,7 +117,8 @@ export function transactionManagerContract(cases: readonly TransactionManagerCon
     describe.each(cases.map(contractCase => [contractCase.name, contractCase] as const))(
         'TransactionManager contract for %s',
         (_name, contractCase) => {
-            const {create} = contractCase;
+            const {create, managesTransactions, withoutActiveTransaction} = contractCase;
+            const forManagedTransactions = test.runIf(managesTransactions);
 
             test('runInTransaction resolves with the result of the unit of work', async () => {
                 const {manager} = create();
@@ -262,6 +289,211 @@ export function transactionManagerContract(cases: readonly TransactionManagerCon
                 await expect(runReusingAmbientTransaction(manager, async () => {
                     throw failure;
                 })).rejects.toBe(failure);
+            });
+
+            test(`commit() without an active transaction ${withoutActiveTransaction}`, async () => {
+                const {manager} = create();
+
+                if (withoutActiveTransaction === 'rejects') {
+                    await expect(manager.commit()).rejects.toThrow();
+                } else {
+                    await expect(manager.commit()).resolves.toBeUndefined();
+                }
+            });
+
+            test(`rollback() without an active transaction ${withoutActiveTransaction}`, async () => {
+                const {manager} = create();
+
+                if (withoutActiveTransaction === 'rejects') {
+                    await expect(manager.rollback()).rejects.toThrow();
+                } else {
+                    await expect(manager.rollback()).resolves.toBeUndefined();
+                }
+            });
+
+            test(`a second commit() ${withoutActiveTransaction}`, async () => {
+                const {manager} = create();
+                await manager.begin();
+                await manager.commit();
+
+                if (withoutActiveTransaction === 'rejects') {
+                    await expect(manager.commit()).rejects.toThrow();
+                } else {
+                    await expect(manager.commit()).resolves.toBeUndefined();
+                }
+            });
+
+            forManagedTransactions('inTransaction() reports no transaction before begin()', () => {
+                const {manager} = create();
+
+                expect(manager.inTransaction()).toEqual(false);
+            });
+
+            forManagedTransactions('inTransaction() follows begin() and commit()', async () => {
+                const {manager} = create();
+
+                expect(manager.inTransaction()).toEqual(false);
+
+                await manager.begin();
+
+                expect(manager.inTransaction()).toEqual(true);
+
+                await manager.commit();
+
+                expect(manager.inTransaction()).toEqual(false);
+            });
+
+            forManagedTransactions('inTransaction() follows begin() and rollback()', async () => {
+                const {manager} = create();
+
+                await manager.begin();
+
+                expect(manager.inTransaction()).toEqual(true);
+
+                await manager.rollback();
+
+                expect(manager.inTransaction()).toEqual(false);
+            });
+
+            forManagedTransactions('runInTransaction commits once when the unit of work succeeds', async () => {
+                const {manager, lifecycle} = create();
+
+                await manager.runInTransaction(async () => undefined);
+
+                expect(lifecycle()).toEqual(['begin', 'commit']);
+            });
+
+            forManagedTransactions('runInTransaction rolls back and does not commit when the unit of work throws', async () => {
+                const {manager, lifecycle} = create();
+
+                await expect(manager.runInTransaction(async () => {
+                    throw new Error('the unit of work failed');
+                })).rejects.toThrow();
+
+                expect(lifecycle()).toEqual(['begin', 'rollback']);
+            });
+
+            forManagedTransactions('the rollback receives the error from the unit of work as its cause', async () => {
+                const {manager, rollbackCauses} = create();
+                const failure = new Error('the unit of work failed');
+
+                await expect(manager.runInTransaction(async () => {
+                    throw failure;
+                })).rejects.toBe(failure);
+
+                expect(rollbackCauses()).toEqual([failure]);
+            });
+
+            forManagedTransactions('a nested runInTransaction joins the active transaction instead of committing twice', async () => {
+                const {manager, lifecycle} = create();
+
+                await manager.runInTransaction(async () => {
+                    await manager.runInTransaction(async () => undefined);
+                });
+
+                expect(lifecycle()).toEqual(['begin', 'commit']);
+            });
+
+            forManagedTransactions('a failing nested unit of work rolls the active transaction back once', async () => {
+                const {manager, lifecycle, rollbackCauses} = create();
+                const failure = new Error('the nested unit of work failed');
+
+                await expect(manager.runInTransaction(async () =>
+                    manager.runInTransaction(async () => {
+                        throw failure;
+                    }))).rejects.toBe(failure);
+
+                expect(lifecycle()).toEqual(['begin', 'rollback']);
+                expect(rollbackCauses()).toEqual([failure]);
+            });
+
+            forManagedTransactions('runInIsolation hides the ambient transaction from the unit of work', async () => {
+                const {manager} = create();
+                await manager.begin();
+                let observed = true;
+
+                await manager.runInIsolation(async () => {
+                    observed = manager.inTransaction();
+                });
+
+                expect(observed).toEqual(false);
+                expect(manager.inTransaction()).toEqual(true);
+
+                await manager.commit();
+            });
+
+            forManagedTransactions('runInIsolatedTransaction transacts separately from the ambient transaction', async () => {
+                const {manager, lifecycle} = create();
+                await manager.begin();
+
+                await manager.runInIsolatedTransaction(async () => undefined);
+
+                expect(lifecycle()).toEqual(['begin', 'begin', 'commit']);
+                expect(manager.inTransaction()).toEqual(true);
+
+                await manager.commit();
+            });
+
+            forManagedTransactions('concurrent runInTransaction calls each get their own transaction', async () => {
+                const {manager, lifecycle} = create();
+
+                await Promise.all([
+                    manager.runInTransaction(async () => undefined),
+                    manager.runInTransaction(async () => undefined),
+                ]);
+
+                expect(countOf(lifecycle(), 'begin')).toEqual(2);
+                expect(countOf(lifecycle(), 'commit')).toEqual(2);
+                expect(countOf(lifecycle(), 'rollback')).toEqual(0);
+                expect(manager.inTransaction()).toEqual(false);
+            });
+
+            forManagedTransactions('a second begin() waits for the active transaction to finish', async () => {
+                const {manager} = create();
+                await manager.begin();
+
+                const secondBegin = manager.begin();
+
+                expect(await isStillPending(secondBegin)).toEqual(true);
+
+                await manager.commit();
+                await secondBegin;
+
+                expect(manager.inTransaction()).toEqual(true);
+
+                await manager.commit();
+            });
+
+            forManagedTransactions('reusing an ambient transaction opens and commits one transaction when none is active', async () => {
+                const {manager, lifecycle} = create();
+
+                await runReusingAmbientTransaction(manager, async () => undefined);
+
+                expect(lifecycle()).toEqual(['begin', 'commit']);
+            });
+
+            forManagedTransactions('reusing an ambient transaction leaves the transaction the caller opened alone', async () => {
+                const {manager, lifecycle} = create();
+                await manager.begin();
+
+                await runReusingAmbientTransaction(manager, async () => undefined);
+
+                expect(lifecycle()).toEqual(['begin']);
+                expect(manager.inTransaction()).toEqual(true);
+
+                await manager.commit();
+            });
+
+            forManagedTransactions('reusing an ambient transaction rolls back the transaction it opened itself', async () => {
+                const {manager, lifecycle, rollbackCauses} = create();
+                const failure = new Error('the unit of work failed');
+
+                await expect(runReusingAmbientTransaction(manager, async () => {
+                    throw failure;
+                })).rejects.toBe(failure);
+
+                expect(lifecycle()).toEqual(['begin', 'rollback']);
+                expect(rollbackCauses()).toEqual([failure]);
             });
         },
     );
