@@ -437,8 +437,8 @@ describe('AMQPMessageRelay', () => {
 
     /**
      * Counting a failed delivery can take a while when the count is shared through a store, and
-     * the channel can be replaced in the meantime. Settling the failure on the replacement would
-     * nack whichever of its deliveries carries the same tag: a different message.
+     * the channel that delivered the message can close in the meantime. Settling the failure on
+     * its replacement would nack whichever of its deliveries carries the same tag: a different message.
      */
     test('a failure is never settled on the channel that replaced the one that delivered it', async () => {
         const countingStarted = Promise.withResolvers<void>();
@@ -469,10 +469,11 @@ describe('AMQPMessageRelay', () => {
         await countingStarted.promise;
 
         firstChannel.emit('close');
+        // The reconnect waits for the task in flight, failure hook included, before it takes a new channel
+        await yieldToMacrotask();
+        finishCounting.resolve();
         const secondChannel = await waitForChannel(pool, 2);
         await secondChannel.deliveryTo(queueName);
-        finishCounting.resolve();
-        await yieldToMacrotask();
         await yieldToMacrotask();
 
         expect(secondChannel.nacked).toHaveLength(0);

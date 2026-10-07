@@ -24,7 +24,6 @@ export interface ProcessQueueOptions<Task> {
     onDrained?(queue: ProcessQueue<Task>): Promise<any>;
     onError(config: ErrorContext<Task>): Promise<any>;
     stopOnError?: boolean;
-    onStop?(queue: ProcessQueue<Task>): any;
     onFinish?(task: Task): Promise<any>;
 }
 
@@ -34,5 +33,4 @@ export const ProcessQueueDefaults = Object.seal({
     autoStart: true,
     onDrained: async () => {},
     onFinish: async () => {},
-    onStop: () => {},
 });

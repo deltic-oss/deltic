@@ -9,7 +9,6 @@ export class PartitionedProcessQueue<Task> implements ProcessQueue<Task> {
         factory: processQueueFactory<Task>,
         readonly partitioner: partitioner<Task>,
         readonly numberOfPartitions: number,
-        private readonly onStop: (queue: ProcessQueue<Task>) => any = () => {},
     ) {
         for (let i = 0; i < numberOfPartitions; i++) {
             this.queues.set(i, factory());
@@ -46,6 +45,5 @@ export class PartitionedProcessQueue<Task> implements ProcessQueue<Task> {
         }
 
         await Promise.all(p);
-        this.onStop(this);
     }
 }
