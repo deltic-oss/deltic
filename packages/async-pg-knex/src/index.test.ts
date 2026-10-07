@@ -6,9 +6,15 @@ import {
     type AsyncPoolContext,
 } from '@deltic/async-pg-pool';
 import type {Knex} from 'knex';
-import {AsyncKnexConnectionProvider, extractPgConnection, type Transaction} from './index.js';
+import {
+    AsyncKnexConnectionProvider,
+    extractPgConnection,
+    KnexStreamingNotSupported,
+    type Transaction,
+} from './index.js';
 import {pgConnectionSymbol} from './transaction-wrapper.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
+import {PassThrough} from 'node:stream';
 import {pgTestCredentials} from '../../pg-credentials.js';
 
 const asyncLocalStorage = new AsyncLocalStorage<AsyncPoolContext>();
@@ -1380,6 +1386,37 @@ describe('AsyncKnexConnectionProvider', () => {
 
             expect(caught).toBeInstanceOf(Error);
             expect(completed).toBe(true);
+        });
+    });
+
+    describe('streaming', () => {
+        test('refuses to stream from a lazy connection instead of silently doing nothing', () => {
+            const query = provider.connection()(tableName).select('name');
+
+            expect(() => query.stream()).toThrow(KnexStreamingNotSupported);
+            expect(() => query.pipe(new PassThrough())).toThrow(KnexStreamingNotSupported);
+            expect(() => provider.connection().raw('SELECT 1').stream()).toThrow(KnexStreamingNotSupported);
+        });
+
+        test('asCallback() runs the query and reports the result to the callback', async () => {
+            await provider.connection()(tableName).insert({name: 'Called back', email: 'called-back@example.com'});
+            const reported = Promise.withResolvers<unknown>();
+
+            await provider.connection()(tableName).select('name').asCallback((error: unknown, rows: unknown) => {
+                reported.resolve(error ?? rows);
+            });
+
+            expect(await reported.promise).toEqual([{name: 'Called back'}]);
+        });
+
+        test('asCallback() reports a failing query to the callback', async () => {
+            const reported = Promise.withResolvers<unknown>();
+
+            await provider.connection().raw('SELECT no_such_function()').asCallback((error: unknown) => {
+                reported.resolve(error);
+            }).catch(() => undefined);
+
+            expect(await reported.promise).toBeInstanceOf(Error);
         });
     });
 

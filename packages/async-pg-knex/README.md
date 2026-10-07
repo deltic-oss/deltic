@@ -173,6 +173,15 @@ console.log(query.toString());
 // select * from "users" where "id" = 1
 ```
 
+### Streaming
+
+A lazy connection resolves a connection per query and releases it when the query is done, so it
+cannot hold one for as long as a stream is read: `stream()` and `pipe()` on it throw
+`KnexStreamingNotSupported` rather than silently running nothing. Stream from a transaction, whose
+queries are bound to its connection until it ends (knex needs the `pg-query-stream` package for
+this), or from a connection claimed from the pool. knex's callback interface, `asCallback()`, works on
+lazy queries.
+
 ### Raw Client Access
 
 When you need direct access to the underlying pg client:

@@ -1,6 +1,26 @@
 import type {Knex} from 'knex';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {BufferedCall, Connection} from './types.js';
+import {StandardError} from '@deltic/error-standard';
+
+/**
+ * Thrown when a query on a lazy connection is streamed. A stream would have to hold its connection
+ * for as long as it is read, which a lazy connection — resolved per query and released after it —
+ * does not do.
+ */
+export class KnexStreamingNotSupported extends StandardError {
+    static because = () =>
+        new KnexStreamingNotSupported(
+            'Streaming is not supported on a lazy connection. Stream from a transaction (begin() or withTransaction()), '
+                + 'whose queries are bound to its connection, or from a connection claimed from the pool.',
+            'async-pg-knex.streaming_not_supported',
+        );
+}
+
+/**
+ * Methods that would stream the result instead of building the query.
+ */
+const STREAMING_METHODS = new Set(['stream', 'pipe']);
 
 /**
  * Symbol used to identify and materialize lazy query builder proxies.
@@ -129,6 +149,23 @@ export function createLazyQueryBuilder(
                 };
             }
 
+            if (typeof prop === 'string' && STREAMING_METHODS.has(prop)) {
+                return (): never => {
+                    throw KnexStreamingNotSupported.because();
+                };
+            }
+
+            // knex's callback interface: runs the query, reports to the callback, and hands back
+            // the same promise, so a failure is never left unhandled.
+            if (prop === 'asCallback') {
+                return (callback: (error: unknown, result?: unknown) => void) => {
+                    const execution = executeQuery(knex, pool, tableName, bufferedCalls);
+                    execution.then(result => callback(null, result), (error: unknown) => callback(error));
+
+                    return execution;
+                };
+            }
+
             // clone() creates a new independent lazy query builder
             if (prop === 'clone') {
                 return () => {
@@ -181,6 +218,21 @@ export function createLazyRawBuilder(
             if (prop === 'finally') {
                 return (onFinally?: () => void) => {
                     return executeRawQuery(knex, pool, sql, bindings).finally(onFinally);
+                };
+            }
+
+            if (typeof prop === 'string' && STREAMING_METHODS.has(prop)) {
+                return (): never => {
+                    throw KnexStreamingNotSupported.because();
+                };
+            }
+
+            if (prop === 'asCallback') {
+                return (callback: (error: unknown, result?: unknown) => void) => {
+                    const execution = executeRawQuery(knex, pool, sql, bindings);
+                    execution.then(result => callback(null, result), (error: unknown) => callback(error));
+
+                    return execution;
                 };
             }
 

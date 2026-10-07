@@ -6,6 +6,7 @@ import {createTransactionWrapper, extractPgConnection} from './transaction-wrapp
 
 export type {Connection, ConnectionProvider, Transaction, BufferedCall} from './types.js';
 export {createLazyConnection, createLazyQueryBuilder, createLazyRawBuilder} from './lazy-query-builder.js';
+export {KnexStreamingNotSupported} from './lazy-query-builder.js';
 export {createTransactionWrapper, extractPgConnection, pgConnectionSymbol} from './transaction-wrapper.js';
 
 /**
