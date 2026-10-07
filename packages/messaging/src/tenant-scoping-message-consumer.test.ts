@@ -51,24 +51,36 @@ describe('TenantScopingMessageConsumer', () => {
         expect(tenantContext.resolve()).toBe('original-tenant');
     });
 
-    test('it restores the original tenant context when consumption fails', async () => {
+    /**
+     * A relay keeps handing messages to the same consumer instance. Every message is
+     * scoped to its own tenant, so a failure does not affect how the next message is
+     * scoped.
+     */
+    test('every message is scoped to its own tenant, also after a failure', async () => {
         const tenantContext = new ValueReadWriterUsingMemory<string>();
-        tenantContext.use('original-tenant');
+        const observedTenants: (string | undefined)[] = [];
 
         const consumer: MessageConsumer<ExampleStream> = {
-            async consume() {
-                throw new Error('consumption failed');
+            async consume(message) {
+                observedTenants.push(tenantContext.resolve());
+
+                if (message.payload.name === 'fails') {
+                    throw new Error('consumption failed');
+                }
             },
         };
 
         const scoping = new TenantScopingMessageConsumer(tenantContext, consumer);
-        const message = createMessage<ExampleStream>('example', {name: 'test'}, {
-            aggregate_root_id: 'abc',
-            tenant_id: 'other-tenant',
-        });
 
-        await expect(scoping.consume(message)).rejects.toThrow('consumption failed');
-        expect(tenantContext.resolve()).toBe('other-tenant');
+        await expect(scoping.consume(createMessage<ExampleStream>('example', {name: 'fails'}, {
+            tenant_id: 'tenant-a',
+        }))).rejects.toThrow('consumption failed');
+
+        await scoping.consume(createMessage<ExampleStream>('example', {name: 'succeeds'}, {
+            tenant_id: 'tenant-b',
+        }));
+
+        expect(observedTenants).toEqual(['tenant-a', 'tenant-b']);
     });
 
     test('it sets undefined when the message has no tenant_id header', async () => {

@@ -212,5 +212,12 @@ describe('InMemoryMessageRepository', () => {
             expect(collected.length).toEqual(5);
             expect(collected).toEqual(ids.slice(2, 7));
         });
+
+        test('an unknown afterId yields nothing rather than starting from the beginning', async () => {
+            const paginated = repository.paginateIds({limit: 5, afterId: 'does-not-exist'});
+
+            expect(await collect(paginated)).toHaveLength(0);
+        });
+
     });
 });
