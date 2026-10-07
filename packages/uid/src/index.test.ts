@@ -129,6 +129,15 @@ describe('PrefixedBrandedIdConversion', () => {
         expect(serialConversion.fromDatabase(42)).toBe('invoice_42');
     });
 
+    test('it exposes conversion methods that can be passed as standalone callbacks', () => {
+        const ids = [generator.generateId(), generator.generateId()];
+
+        const databaseValues = ids.map(conversion.toDatabase);
+
+        expect(databaseValues).toEqual(ids.map(id => id.substring('person_'.length)));
+        expect(databaseValues.map(conversion.fromDatabase)).toEqual(ids);
+    });
+
     test('it rejects ids that do not carry the configured prefix', () => {
         const orderIds = new PrefixedBrandedIdGenerator('order', uuidV7);
         const foreignId = orderIds.generateId() as unknown as PersonId;

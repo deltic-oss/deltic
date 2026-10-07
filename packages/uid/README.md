@@ -100,6 +100,9 @@ conversion.fromDatabase('0193a5f8-...'); // 'user_0193a5f8-...' (prefix added)
 `toDatabase` throws `UnexpectedIdPrefix` for an id that does not start with `{prefix}_`, such as a string
 cast to the wrong id type, rather than storing it under a mangled key.
 
+`toDatabase` and `fromDatabase` are bound to their instance, so they can be passed around as plain functions,
+for example `ids.map(conversion.toDatabase)`.
+
 ### ULID to UUID Conversion
 
 ```typescript
