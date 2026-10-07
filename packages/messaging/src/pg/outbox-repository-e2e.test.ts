@@ -156,4 +156,54 @@ describe.each([
         expect(consumedLeft).toEqual(4);
         expect(secondClean).toEqual(4);
     });
+
+    test('persisting no messages is a no-op', async () => {
+        await dispatcher.send();
+
+        expect(await repository.numberOfPendingMessages()).toEqual(0);
+    });
+
+    test('marking no messages as consumed is a no-op', async () => {
+        await dispatcher.send(example1);
+
+        await repository.markConsumed([]);
+
+        expect(await repository.numberOfPendingMessages()).toEqual(1);
+        expect(await repository.numberOfConsumedMessages()).toEqual(0);
+    });
+
+    test('a batch size of zero retrieves nothing', async () => {
+        await dispatcher.send(...examples);
+
+        expect(await collect(repository.retrieveBatch(0))).toEqual([]);
+    });
+
+    test('messages keep the order they were persisted in across separate writes', async () => {
+        await dispatcher.send(example1);
+        await dispatcher.send(example2, example3);
+        await dispatcher.send(example4);
+
+        expect((await collect(repository.retrieveBatch(10))).map(withoutHeaders)).toEqual(examples);
+    });
+
+    /**
+     * The outbox exists so a message survives a broker that is unavailable. A dispatch
+     * that failed must leave the messages pending for the next relay round.
+     */
+    test('messages are relayed again when the dispatcher fails', async () => {
+        await dispatcher.send(example1, example2);
+        const failingRelay = new OutboxRelay<ExampleStream>(repository, {
+            async send() {
+                throw new Error('broker unavailable');
+            },
+        });
+
+        await expect(failingRelay.relayBatch(10, 25)).rejects.toThrow('broker unavailable');
+        expect(await repository.numberOfPendingMessages()).toEqual(2);
+
+        await relay.relayBatch(10, 25);
+
+        expect(collectingDispatcher.producedMessages().map(withoutHeaders)).toEqual([example1, example2]);
+        expect(await repository.numberOfPendingMessages()).toEqual(0);
+    });
 });
