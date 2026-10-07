@@ -95,7 +95,7 @@ const queue = new ConcurrentProcessQueue<Job>({
 queue.start();
 await queue.push(job);
 await queue.stop();  // waits for in-flight tasks
-await queue.purge(); // clears pending tasks
+await queue.purge(); // drops pending tasks, rejecting them with TaskWasPurged
 ```
 
 ## Lifecycle
@@ -113,7 +113,8 @@ await queue.purge(); // clears pending tasks
   `skipCurrentTask()` in `onError` to drop it as well. From inside a processor or hook, awaiting
   `stop()` through any other reference to the queue waits for the caller's own task, and never
   resolves.
-- **`purge()`** stops the queue the same way and drops the tasks that are waiting.
+- **`purge()`** stops the queue the same way and drops the tasks that are waiting. Their `push()`
+  promises reject with `TaskWasPurged`.
 
 ### Failed Tasks
 
@@ -145,7 +146,7 @@ A hook that throws or rejects never stops the queue's own bookkeeping:
 | `push(task)` | Adds a task to the queue; the promise settles with the task's outcome |
 | `start()` | Starts processing |
 | `stop()` | Stops processing, waits for in-flight tasks (see "Lifecycle") |
-| `purge()` | Stops processing and drops the tasks that are waiting |
+| `purge()` | Stops processing and drops the tasks that are waiting; their `push()` promises reject with `TaskWasPurged` |
 | `isProcessing()` | Returns `true` if the queue is started — whether or not work is in flight |
 
 ### `ProcessQueueOptions<Task>`

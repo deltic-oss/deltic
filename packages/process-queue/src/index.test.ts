@@ -4,6 +4,7 @@ import {
     type ProcessQueue,
     type ProcessQueueOptions,
     SequentialProcessQueue,
+    TaskWasPurged,
 } from './index.js';
 import {WaitGroup} from '@deltic/wait-group';
 
@@ -657,6 +658,53 @@ describe.each([
         await processQueue.stop();
     });
 
+    test('settles the promises of the tasks it purges', async () => {
+        const processQueue = factory({
+            autoStart: false,
+            onError: async () => {},
+            processor: async () => {},
+        });
+        let outcome: unknown = 'pending';
+        processQueue.push('a').then(
+            () => (outcome = 'completed'),
+            reason => (outcome = reason),
+        );
+        await processQueue.purge();
+        await flushTicks();
+        expect(outcome).toBeInstanceOf(TaskWasPurged);
+    });
+
+    test('purging lets the task in flight finish and rejects the tasks that are waiting', async () => {
+        const processor = new GatedProcessor<string>();
+        const processQueue = factory({
+            maxProcessing: 1,
+            onError: async () => {},
+            processor: processor.process,
+        });
+        const inFlight = processQueue.push('a');
+        const waiting = processQueue.push('b');
+        await flushTicks();
+        const purged = processQueue.purge();
+        processor.complete('a');
+        await purged;
+        await expect(inFlight).resolves.toEqual('a');
+        await expect(waiting).rejects.toBeInstanceOf(TaskWasPurged);
+        expect(processor.started).toEqual(['a']);
+    });
+
+    test('purging does not leave an unhandled rejection behind for tasks nobody awaits', async () => {
+        const processQueue = factory({
+            autoStart: false,
+            onError: async () => {},
+            processor: async () => {},
+        });
+        const unhandled = await withoutProcessErrorHandlers('unhandledRejection', async () => {
+            void processQueue.push('a');
+            await processQueue.purge();
+            await flushTicks();
+        });
+        expect(unhandled).toEqual([]);
+    });
 });
 
 describe('@deltic/process-queue SequentialProcessQueue', () => {

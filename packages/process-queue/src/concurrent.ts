@@ -1,4 +1,4 @@
-import {type ProcessQueue, ProcessQueueDefaults, type ProcessQueueOptions} from './api.js';
+import {type ProcessQueue, ProcessQueueDefaults, type ProcessQueueOptions, TaskWasPurged} from './api.js';
 
 interface QueuedTask<Task> {
     readonly task: Task;
@@ -71,7 +71,7 @@ export class ConcurrentProcessQueue<Task> implements ProcessQueue<Task> {
     }
 
     /**
-     * Stops the queue and drops the tasks that are waiting.
+     * Stops the queue and drops the tasks that are waiting, rejecting them with `TaskWasPurged`.
      */
     async purge(): Promise<void> {
         await this.stop();
@@ -79,7 +79,15 @@ export class ConcurrentProcessQueue<Task> implements ProcessQueue<Task> {
     }
 
     private dropWaitingTasks(): void {
+        const purged = this.backlog.filter(item => !this.inFlight.has(item));
         this.backlog = this.backlog.filter(item => this.inFlight.has(item));
+
+        for (const item of purged) {
+            // Like a skipped task, a purged one must not become an unhandled rejection for a caller that
+            // let go of its promise; a caller that awaits it still sees the rejection.
+            item.promise.catch(() => {});
+            item.reject(TaskWasPurged.beforeItWasProcessed());
+        }
     }
 
     private halt(): void {
