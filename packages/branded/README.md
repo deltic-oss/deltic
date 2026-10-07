@@ -66,6 +66,9 @@ type Branded<T, TBrand extends string>
 
 Creates a nominally-typed version of `T` using a unique symbol. The brand exists only at compile time and has no runtime cost.
 
+Brands can be layered: `Branded<UserId, 'Verified'>` is a `UserId` that is also `Verified`, accepted wherever
+either brand is expected.
+
 ## License
 
 ISC
