@@ -137,7 +137,6 @@ Chain multiple consumers, add locking, or dispatch to type-specific handlers:
 ```typescript
 import {DispatchingMessageConsumer} from '@deltic/messaging/dispatching-message-consumer';
 import {LockingMessageConsumer} from '@deltic/messaging/locking-message-consumer';
-import {SequentialMessageConsumer} from '@deltic/messaging/sequential-message-consumer';
 import {MessageConsumerChain} from '@deltic/messaging/message-consumer-chain';
 ```
 
@@ -151,6 +150,28 @@ message; when the failure leads to a redelivery they receive it again, so they n
 ```typescript
 const consumer = new MessageConsumerChain(updateProjection, sendWebhook);
 ```
+
+### Consuming One Message at a Time
+
+To hand a consumer one message at a time, in the order they arrive, push them onto a
+`SequentialProcessQueue` from `@deltic/process-queue` whose processor calls the consumer:
+
+```typescript
+import type {AnyMessageFrom} from '@deltic/messaging';
+import {SequentialProcessQueue} from '@deltic/process-queue';
+
+const queue = new SequentialProcessQueue<AnyMessageFrom<OrderStream>>({
+    processor: message => consumer.consume(message),
+    // without skipping, a failed message stops the queue (see `stopOnError`)
+    onError: async ({skipCurrentTask}) => skipCurrentTask(),
+});
+
+await queue.push(message); // settles once this message has been consumed
+```
+
+`PartitionedProcessQueue` keeps one such queue per partition, picked by a number you derive from the
+message, such as a hash of its aggregate root id. Each aggregate's messages then keep their order,
+while messages in different partitions are consumed side by side.
 
 ### Scoping Consumption to a Tenant
 
@@ -260,7 +281,6 @@ import {UpcasterUpcastingMessageRepository} from '@deltic/messaging/upcasting';
 | `@deltic/messaging/message-decorator-chain` | Chains multiple decorators |
 | `@deltic/messaging/message-dispatcher-chain` | Runs multiple dispatchers in order |
 | `@deltic/messaging/locking-message-consumer` | Adds mutex locking to consumption |
-| `@deltic/messaging/sequential-message-consumer` | Sequential message processing |
 | `@deltic/messaging/reducing-message-consumer` | Reduce pattern for consumers |
 | `@deltic/messaging/exactly-once-message-consumer-decorator` | Idempotent message processing |
 | `@deltic/messaging/context-message-decorator` | Adds context values to headers |

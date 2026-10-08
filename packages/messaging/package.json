@@ -196,12 +196,6 @@
       "module-sync": "./dist/reducing-message-consumer.mjs",
       "types": "./dist/reducing-message-consumer.d.mts"
     },
-    "./sequential-message-consumer": {
-      "import": "./dist/sequential-message-consumer.mjs",
-      "require": "./dist/sequential-message-consumer.cjs",
-      "module-sync": "./dist/sequential-message-consumer.mjs",
-      "types": "./dist/sequential-message-consumer.d.mts"
-    },
     "./tenant-id-decorator": {
       "import": "./dist/tenant-id-decorator.mjs",
       "require": "./dist/tenant-id-decorator.cjs",
