@@ -1,5 +1,5 @@
 ---
-"@deltic/async-pg-pool": patch
+"@deltic/async-pg-pool": major
 ---
 
 Take ownership of a connection's whole life, so it can always be handed back.

@@ -1,5 +1,5 @@
 ---
-"@deltic/async-pg-pool": patch
+"@deltic/async-pg-pool": major
 ---
 
 Add `abandon()`, and stop the transaction reservation from wedging a context.
