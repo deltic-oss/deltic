@@ -27,6 +27,12 @@
       "require": "./dist/pg-with-columns.cjs",
       "module-sync": "./dist/pg-with-columns.mjs",
       "types": "./dist/pg-with-columns.d.mts"
+    },
+    "./object-hash": {
+      "import": "./dist/object-hash.mjs",
+      "require": "./dist/object-hash.cjs",
+      "module-sync": "./dist/object-hash.mjs",
+      "types": "./dist/object-hash.d.mts"
     }
   },
   "keywords": [
