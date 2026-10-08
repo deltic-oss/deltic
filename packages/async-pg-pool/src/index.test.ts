@@ -22,6 +22,23 @@ const insertLedgerEntry = `INSERT INTO ${ledgerTable} (identifier, note) VALUES 
 const selectLedgerEntry = `SELECT note FROM ${ledgerTable} WHERE identifier = $1`;
 
 /**
+ * Holds a constraint that is only checked when the transaction commits, so a test
+ * can fail a commit the way a real deferred constraint does.
+ */
+const deferredLedgerTable = 'async_pool_deferred_ledger';
+const insertDeferredLedgerEntry = `INSERT INTO ${deferredLedgerTable} (identifier) VALUES ($1)`;
+
+/**
+ * Tests that expect a connection to break register these, so a connection level
+ * error does not surface as an unhandled error event.
+ */
+const ignoreConnectionErrors = (pgPool: Pool, connection: Connection): void => {
+    const ignore = () => undefined;
+    pgPool.on('error', ignore);
+    connection.on('error', ignore);
+};
+
+/**
  * A case that talks to Postgres and is expected to pass, so it keeps the configured retries.
  */
 const databaseTest = {timeout: 20000} as const;
@@ -162,10 +179,19 @@ describe('AsyncPgPool', () => {
                 note       TEXT NOT NULL
             );
         `);
+        await pool.query(`DROP TABLE IF EXISTS ${deferredLedgerTable}`);
+        await pool.query(`
+            CREATE TABLE ${deferredLedgerTable}
+            (
+                identifier TEXT NOT NULL,
+                CONSTRAINT ${deferredLedgerTable}_unique UNIQUE (identifier) DEFERRABLE INITIALLY DEFERRED
+            );
+        `);
     });
 
     afterAll(async () => {
         await pool.query(`DROP TABLE IF EXISTS ${ledgerTable}`);
+        await pool.query(`DROP TABLE IF EXISTS ${deferredLedgerTable}`);
         await pool.end();
     });
 
@@ -871,6 +897,33 @@ describe('AsyncPgPool', () => {
     });
 
     describe('transactions that do not go to plan', () => {
+        test('reports a failure when the server discards an aborted transaction on commit', databaseTest, async () => {
+            const identifier = randomUUID();
+
+            await inScope({}, async scoped => {
+                const outcome = scoped.runInTransaction(async () => {
+                    const connection = await scoped.primary();
+                    await connection.query(insertLedgerEntry, [identifier, 'first write']);
+
+                    try {
+                        // the conflict a repository handles itself, for instance while
+                        // upserting: the transaction is aborted from here on
+                        await connection.query(insertLedgerEntry, [identifier, 'conflicting write']);
+                    } catch {
+                        // handled by the caller
+                    }
+                });
+
+                // Postgres discards the whole aborted transaction, first write included — that part
+                // is not fixable. What must never happen is the caller being told it committed.
+                await expect(outcome).rejects.toThrow('the server discarded it instead of committing');
+
+                const result = await pool.query(selectLedgerEntry, [identifier]);
+
+                expect(result.rows).toEqual([]);
+            });
+        });
+
         test('releases the transaction lock when the begin query fails', databaseTest, async () => {
             const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
             const context = asyncScopedContext();
@@ -990,6 +1043,84 @@ describe('AsyncPgPool', () => {
 
                     await scoped.abandon({rollbackOpenTransaction: true});
                 });
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('propagates the error of an isolated unit of work that forgot its transaction', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+            const context = asyncScopedContext();
+            const scoped = new AsyncPgPool(dedicated, {}, context);
+
+            try {
+                await context.run(async () => {
+                    // The forgotten transaction makes the flush inside runInIsolation complain;
+                    // that complaint must not replace the unit of work's own failure.
+                    const outcome = scoped.runInIsolation(async () => {
+                        await scoped.begin();
+
+                        throw new Error('the unit of work failed');
+                    });
+
+                    await expect(outcome).rejects.toThrow('the unit of work failed');
+
+                    // The complaint stepping aside must not mean the cleanup did: the
+                    // isolated scope still has to give its connection back.
+                    expect(await capacityOf(dedicated)).toBe('available');
+                });
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('propagates the error of the unit of work when the rollback fails', databaseTest, async () => {
+            const pool = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({}, async scoped => {
+                    await expect(scoped.runInTransaction(async () => {
+                        const transaction = scoped.withTransaction();
+                        ignoreConnectionErrors(pool, transaction);
+                        // the server hangs up on the session while the unit of work runs
+                        await transaction.query('SET idle_in_transaction_session_timeout = \'20ms\'');
+                        await wait(300);
+
+                        throw new Error('the unit of work failed');
+                    })).rejects.toThrow('the unit of work failed');
+                }, pool);
+            } finally {
+                await outcomeWithin(pool.end(), 2000);
+            }
+        });
+
+        test('reports the failure that made the commit fail', databaseTest, async () => {
+            const identifier = randomUUID();
+
+            await inScope({}, async scoped => {
+                const failure = await scoped.runInTransaction(async () => {
+                    const connection = await scoped.primary();
+                    // a constraint that only fires when the transaction commits
+                    await connection.query(insertDeferredLedgerEntry, [identifier]);
+                    await connection.query(insertDeferredLedgerEntry, [identifier]);
+                }).then(() => undefined, (error: unknown) => error);
+
+                expect((failure as {code?: string}).code).toEqual('23505');
+            });
+        });
+
+        test('surfaces the failure of the release hook after committing', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({
+                    onRelease: () => {
+                        throw new Error('the release hook failed');
+                    },
+                }, async scoped => {
+                    await expect(scoped.runInTransaction(async () => 'persisted'))
+                        .rejects.toThrow('the release hook failed');
+                }, dedicated);
             } finally {
                 await outcomeWithin(dedicated.end(), 2000);
             }
@@ -1350,5 +1481,20 @@ describe('AsyncPgPool', () => {
             }
         }, 20000);
 
+        test('rejects when committing without an active transaction', databaseTest, async () => {
+            await inScope({}, async scoped => {
+                const manager = new TransactionManagerUsingPg(scoped);
+
+                await expect(manager.commit()).rejects.toThrow('no transaction was active');
+            });
+        });
+
+        test('rejects when rolling back without an active transaction', databaseTest, async () => {
+            await inScope({}, async scoped => {
+                const manager = new TransactionManagerUsingPg(scoped);
+
+                await expect(manager.rollback()).rejects.toThrow('no transaction was active');
+            });
+        });
     });
 });
