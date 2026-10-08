@@ -99,6 +99,8 @@ await asyncPool.runInTransaction(async () => {
 
 Nested calls to `runInTransaction` reuse the existing transaction.
 
+Inside a transaction, `primary()` hands out the transaction's connection. Code that releases what it got from `primary()` needs no special case for that: `release()` leaves the active transaction's connection alone, as it does the primary connection, and the pool hands it back once the transaction is committed or rolled back.
+
 #### Custom Isolation Levels
 
 ```typescript

@@ -96,6 +96,29 @@ describe('AsyncPgPool', () => {
             expect(collected).toContainEqual('two');
         });
 
+        test('leaves the connection of the active transaction to whoever finalises it', async () => {
+            let released = 0;
+            provider = factory({
+                freshResetQuery: 'RESET ALL',
+                keepPrimaryConnection,
+                lockAfterFlush,
+                onRelease: () => {
+                    released++;
+                },
+            });
+            const transaction = await provider.begin();
+            const connection = await provider.primary();
+
+            await provider.release(connection);
+            await provider.release(connection, new Error('a query of the unit of work failed'));
+            await connection.query('SELECT 1');
+            expect(released).toEqual(0);
+
+            await provider.commit(transaction);
+
+            expect(released).toEqual(1);
+        });
+
         test('smoketest, using an encapsulated transaction', async () => {
             let wasInTransaction: boolean = false;
 
