@@ -1,5 +1,5 @@
 ---
-"@deltic/messaging": patch
+"@deltic/messaging": major
 ---
 
 Allow `ExactlyOnceMessageConsumerDecorator` to be introduced for a consumer that already processed messages.
