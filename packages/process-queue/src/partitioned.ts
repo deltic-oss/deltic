@@ -9,7 +9,6 @@ export class PartitionedProcessQueue<Task> implements ProcessQueue<Task> {
         factory: processQueueFactory<Task>,
         readonly partitioner: partitioner<Task>,
         readonly numberOfPartitions: number,
-        private readonly onStop: (queue: ProcessQueue<Task>) => any = () => {},
     ) {
         for (let i = 0; i < numberOfPartitions; i++) {
             this.queues.set(i, factory());
@@ -30,7 +29,12 @@ export class PartitionedProcessQueue<Task> implements ProcessQueue<Task> {
     }
 
     push(task: Task): Promise<Task> {
-        return this.queues.get(this.partitioner(task) % this.numberOfPartitions)!.push(task);
+        // `%` keeps the sign of the key; adding the number of partitions maps negative keys into range,
+        // while a non-negative key keeps the partition it always had.
+        const key = Math.trunc(this.partitioner(task));
+        const partition = ((key % this.numberOfPartitions) + this.numberOfPartitions) % this.numberOfPartitions;
+
+        return this.queues.get(partition)!.push(task);
     }
 
     start(): void {
@@ -46,6 +50,5 @@ export class PartitionedProcessQueue<Task> implements ProcessQueue<Task> {
         }
 
         await Promise.all(p);
-        this.onStop(this);
     }
 }

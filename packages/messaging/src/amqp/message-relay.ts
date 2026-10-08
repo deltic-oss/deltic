@@ -289,9 +289,8 @@ export class AMQPMessageRelay<Stream extends StreamDefinition> {
 
                     /**
                      * The processor and the error hook settle the delivery; the promise only
-                     * reports the outcome again. A reconnect that purges the queue while a failure
-                     * is being counted leaves that rejection without the handler the queue would
-                     * otherwise attach, and an unhandled rejection ends the process.
+                     * reports the outcome again. A failed or purged task rejects it, and an
+                     * unhandled rejection ends the process.
                      */
                     this.processQueue.push({
                         amqp,
