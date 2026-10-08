@@ -190,4 +190,20 @@ describe('Delayed Outbox Repository', () => {
         expect(consumedLeft).toEqual(4);
         expect(secondClean).toEqual(4);
     });
+
+    test('the delay grows with every re-persist of the same message', async () => {
+        await dispatcher.send(createMessage('ping', 1));
+        testClock.advance(10_000);
+
+        const [firstAttempt] = await collect(repository.retrieveBatch(10));
+        await repository.markConsumed([firstAttempt]);
+        await repository.persist([firstAttempt]);
+        testClock.advance(10_000);
+
+        const pending = await collect(repository.retrieveBatch(10));
+
+        expect(firstAttempt.headers['attempt']).toEqual(1);
+        expect(pending.map(m => m.headers['attempt'])).toEqual([2]);
+    });
+
 });

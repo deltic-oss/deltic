@@ -66,4 +66,5 @@ describe('SynchronousMessageConsumer', () => {
             new Error('something went wrong'),
         );
     });
+
 });
