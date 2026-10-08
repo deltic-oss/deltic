@@ -1,5 +1,5 @@
 ---
-"@deltic/messaging": patch
+"@deltic/messaging": major
 ---
 
 Apply the configured id conversions to every id `MessageRepositoryUsingPg` sends to the database.
