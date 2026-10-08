@@ -108,6 +108,11 @@ Nested calls to `runInTransaction` reuse the existing transaction.
 
 Inside a transaction, `primary()` hands out the transaction's connection. Code that releases what it got from `primary()` needs no special case for that: `release()` leaves the active transaction's connection alone, as it does the primary connection, and the pool hands it back once the transaction is committed or rolled back.
 
+The connection `begin()` returns, and anything `primary()` or `withTransaction()` returns while the
+transaction is open, belongs to that transaction: once it is committed or rolled back, a query
+through it is refused with `UnableToUseConnection` rather than running outside of it. See
+[`Connection`](#connection).
+
 #### Transaction outcomes are verified
 
 `commit()` believes the server, not the query. When a statement inside a transaction failed and its
@@ -274,7 +279,10 @@ It leaves the transaction and its connection to the handler that owns them, and 
 for a request that was never interrupted.
 
 When reclaiming the connection matters more than the in-flight work — a hard deadline, where a
-handler has had its grace period and is presumed stuck — pass `rollbackOpenTransaction`:
+handler has had its grace period and is presumed stuck — pass `rollbackOpenTransaction`. A handler
+that turns out to be still running finds its transaction and connections ended: its later queries
+are refused with `UnableToUseConnection` rather than landing on connections that are back in the
+pool.
 
 ```typescript
 import {AsyncResource} from 'node:async_hooks';
@@ -321,6 +329,24 @@ const transactionManager = new TransactionManagerUsingPg(asyncPool);
 ### `Connection`
 
 Extends pg's `PoolClient` (without `release`) and supports `Symbol.asyncDispose` for `await using` syntax.
+
+A `Connection` is a handle on the driver's client, not the client itself, because the driver gives
+that same client object to the next caller once it is back in its pool. Every `claim()` (and every
+`primary()` that claims) gets a handle of its own, and so does every transaction `begin()` starts. A
+handle stops working when what it stands for has ended:
+
+- a claimed connection, once it is released — including by `flush()` or `abandon()` — or parked as
+  idle for the context;
+- a transaction's connection, once the transaction is committed or rolled back, even when the
+  connection itself stays with the context as its primary connection.
+
+A query through a handle after that point is refused with `UnableToUseConnection`, reported the way
+`pg` reports a failing query (a rejected promise, or the callback), instead of running outside the
+transaction it was meant for, or on a connection that may already serve another flow — under that
+flow's transaction and tenant settings. Everything other than querying — listeners, `escapeIdentifier`
+and the like — reaches the client as before. A release hook can still query the connection it is
+resetting. Releasing a handle that was already released — parked as idle, or ended with its
+transaction — rejects instead of handing the connection out twice.
 
 ## How It Works
 

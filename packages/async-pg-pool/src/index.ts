@@ -14,19 +14,48 @@ const originalRelease = Symbol.for('@deltic/async-pg-pool/release');
 const supervision = Symbol.for('@deltic/async-pg-pool/supervision');
 
 /**
- * Tracks whether a connection may still be used, and holds the only reference to the driver's
- * release function.
+ * One checkout of a client from the driver's pool, from the moment it is taken until it is handed
+ * back. Holds the only reference to the driver's release function.
  *
  * `handedBack` is deliberately separate from `releasing`: the release hook still has to be able to
  * query the connection it is resetting, while a connection that has gone back to the pool must
  * refuse every further query, because the driver may already have handed it to another caller.
  */
-interface ConnectionSupervision {
-    releasing: boolean;
-    handedBack: boolean;
-    handBack: PoolClient['release'];
+class ConnectionLease {
+    releasing = false;
+    handedBack = false;
     /**
-     * How the most recent transaction on this connection ended. What it exists for: the manual
+     * The handle that currently stands for this checkout. Replaced when the connection is parked as
+     * idle, so that whoever released it cannot keep using it once the next claim receives it.
+     */
+    checkout!: Connection;
+
+    constructor(
+        readonly client: PoolClient,
+        readonly handBack: PoolClient['release'],
+    ) {}
+}
+
+/**
+ * What a handle the pool gave out knows about itself.
+ *
+ * The pool never gives out the driver's client itself, because the driver hands that same object to
+ * the next caller once it is back in its pool, and a reference kept past that point would query on
+ * the next caller's behalf — in its transaction, under its tenant settings. Every claim, and every
+ * transaction, gets a handle of its own instead, and a handle stops working when what it stood for
+ * has ended.
+ */
+interface ConnectionSupervision {
+    readonly lease: ConnectionLease;
+    /**
+     * `claimed` stands for a checkout; `transaction` stands for one transaction on a checkout, and
+     * stops working when that transaction is committed or rolled back — even when the connection
+     * itself stays with the context, as the primary connection does.
+     */
+    readonly role: 'claimed' | 'transaction';
+    revoked: boolean;
+    /**
+     * How the transaction ended. What it exists for: the manual
      * `try { commit } catch (e) { rollback(trx, e) }` pattern. When the commit itself failed, the
      * transaction is already finalised by the time the compensating rollback arrives — the rollback
      * asks for something that is already true, and must not replace the commit's error with a
@@ -35,6 +64,44 @@ interface ConnectionSupervision {
      * the transaction is theirs — both must stay loud.
      */
     transactionOutcome?: 'committed' | 'rolled-back' | 'commit-failed';
+}
+
+type QueryArguments = unknown[];
+
+interface Submittable {
+    submit: (...args: unknown[]) => void;
+    handleError?: (error: Error) => void;
+}
+
+function isSubmittable(value: unknown): value is Submittable {
+    return typeof value === 'object' && value !== null && typeof (value as Partial<Submittable>).submit === 'function';
+}
+
+/**
+ * Report a refused query the way the driver reports a query it cannot run, for each of the shapes
+ * `query` accepts: a submittable (a cursor, a stream) learns through its own error handling, a
+ * callback is called, and otherwise the returned promise rejects. Never synchronously, so a refused
+ * query is caught wherever a failing one would be.
+ */
+function refuseQuery([config, values, callback]: QueryArguments, error: Error): unknown {
+    if (isSubmittable(config)) {
+        process.nextTick(() => config.handleError?.(error));
+
+        return config;
+    }
+
+    const configuredCallback = typeof config === 'object' && config !== null
+        ? (config as {callback?: unknown}).callback
+        : undefined;
+    const done = [callback, values, configuredCallback].find(candidate => typeof candidate === 'function');
+
+    if (done !== undefined) {
+        process.nextTick(() => (done as (error: Error) => void)(error));
+
+        return undefined;
+    }
+
+    return Promise.reject(error);
 }
 
 export interface Connection extends Omit<PoolClient, 'release'> {
@@ -75,6 +142,14 @@ export function asyncPoolContext(): AsyncPoolContext {
 
 function supervisionIfAny(connection: Connection): ConnectionSupervision | undefined {
     return (connection as unknown as Record<symbol, ConnectionSupervision | undefined>)[supervision];
+}
+
+/**
+ * The lease's current handle when the connection is one this pool gave out, so that bookkeeping
+ * always compares checkouts — a transaction's handle stands for the checkout it runs on.
+ */
+function checkoutOf(connection: Connection | undefined): Connection | undefined {
+    return connection === undefined ? undefined : supervisionIfAny(connection)?.lease.checkout ?? connection;
 }
 
 function supervisionOf(connection: Connection): ConnectionSupervision {
@@ -440,14 +515,18 @@ export class AsyncPgPool {
 
         const failures: unknown[] = [];
         let transactionError: unknown = undefined;
+        const transactionCheckout = checkoutOf(transaction);
 
         if (transaction !== undefined) {
             context.sharedTransaction = undefined;
+            // Whoever still holds the transaction — a handler that is still running, typically —
+            // must not carry on outside of it once it is rolled back.
+            supervisionOf(transaction).revoked = true;
 
             try {
                 // Rolling back beats letting the driver do it on release: it ends the transaction
                 // server-side now, rather than leaving its locks held until the connection is reaped.
-                await transaction.query('ROLLBACK');
+                await transactionCheckout!.query('ROLLBACK');
             } catch (e) {
                 transactionError = e;
                 failures.push(e);
@@ -475,7 +554,7 @@ export class AsyncPgPool {
             try {
                 // A connection whose rollback failed is handed back as broken, so it gets destroyed
                 // instead of serving the next caller.
-                await this.doRelease(connection, connection === transaction ? transactionError : undefined);
+                await this.doRelease(connection, connection === transactionCheckout ? transactionError : undefined);
                 releasedConnections += 1;
             } catch (e) {
                 failures.push(e);
@@ -508,7 +587,7 @@ export class AsyncPgPool {
     }
 
     private async claimFromPool(): Promise<Connection> {
-        const client = (await this.pool.connect()) as unknown as Connection;
+        const client = await this.pool.connect();
         // Supervise before anything else runs: a claim hook that fails needs a connection that can
         // already be handed back, which is what made a failing hook leak its connection outright.
         const connection = this.supervise(client);
@@ -531,50 +610,96 @@ export class AsyncPgPool {
      * Take ownership of a connection taken from the driver's pool.
      *
      * Everything about giving the connection back lives here: the driver's own release function is
-     * captured where nobody else can reach it, releasing is idempotent, and a connection that has
-     * gone back to the pool refuses further queries rather than quietly running them on a client
-     * that may already belong to another caller.
+     * captured where nobody else can reach it, and releasing is idempotent.
      */
-    private supervise(client: Connection): Connection {
+    private supervise(client: PoolClient): Connection {
         // The driver hands out a fresh single-use release function per checkout, so it is captured
-        // here rather than read off the client later, and the state is replaced on every claim.
-        const state: ConnectionSupervision = {
-            releasing: false,
-            handedBack: false,
-            handBack: (client as unknown as PoolClient).release.bind(client),
+        // here rather than read off the client later.
+        const lease = new ConnectionLease(client, client.release.bind(client));
+        lease.checkout = this.handOut(lease, 'claimed');
+        this.currentContext()?.claimed.add(lease.checkout);
+
+        return lease.checkout;
+    }
+
+    /**
+     * A handle on a checkout: the driver's client in every respect, except that it refuses to query
+     * once what it stands for has ended, and cannot be released behind the pool's back.
+     */
+    private handOut(lease: ConnectionLease, role: ConnectionSupervision['role']): Connection {
+        const state: ConnectionSupervision = {lease, role, revoked: false};
+        const {client} = lease;
+        const clientQuery = client.query as (...args: QueryArguments) => unknown;
+        const query = (...args: QueryArguments): unknown => {
+            if (state.revoked && role === 'transaction') {
+                return refuseQuery(args, UnableToUseConnection.becauseItsTransactionEnded());
+            }
+
+            // A release hook still queries while the connection is `releasing`; only a connection
+            // that has actually gone back to the driver is refused.
+            if (state.revoked || lease.handedBack) {
+                return refuseQuery(args, UnableToUseConnection.becauseItWasReleased());
+            }
+
+            return clientQuery.apply(client, args);
         };
+        const dispose = async (): Promise<void> => {
+            if (!state.revoked && !lease.handedBack) {
+                await this.release(handle);
+            }
+        };
+        const refuseManualRelease = (): never => {
+            throw new Error('You should not release the client manually.');
+        };
+        // A hook that wraps the handle's query (instrumentation, fault injection) wraps the guard.
+        let servedQuery: unknown = query;
+        const handle = new Proxy(client, {
+            set(target, property, value) {
+                if (property === 'query') {
+                    servedQuery = value;
 
-        const connection: Connection = Object.defineProperties(client, {
-            [supervision]: {
-                writable: true,
-                value: state,
-            },
-            /**
-             * BC: the driver's release function has always been reachable under this symbol.
-             */
-            [originalRelease]: {
-                writable: true,
-                value: state.handBack,
-            },
-            [Symbol.asyncDispose]: {
-                writable: true,
-                value: async () => {
-                    if (!state.handedBack) {
-                        await this.release(connection);
-                    }
-                },
-            },
-            release: {
-                writable: true,
-                value: () => {
-                    throw new Error('You should not release the client manually.');
-                },
-            },
-        });
+                    return true;
+                }
 
-        this.currentContext()?.claimed.add(connection);
+                return Reflect.set(target, property, value);
+            },
+            get(target, property) {
+                switch (property) {
+                    case 'query':
+                        return servedQuery;
+                    case 'release':
+                        return refuseManualRelease;
+                    case Symbol.asyncDispose:
+                        return dispose;
+                    case supervision:
+                        return state;
+                    case originalRelease:
+                        // BC: the driver's release function has always been reachable here.
+                        return lease.handBack;
+                    default:
+                        return Reflect.get(target, property);
+                }
+            },
+        }) as unknown as Connection;
 
-        return connection;
+        return handle;
+    }
+
+    /**
+     * Give a checkout a new handle and retire the old one, for a connection that stays with the
+     * context while whoever released it must stop using it.
+     */
+    private reissue(context: AsyncPoolContext, connection: Connection): Connection {
+        const state = supervisionOf(connection);
+        const {lease} = state;
+        state.revoked = true;
+        lease.checkout = this.handOut(lease, 'claimed');
+
+        if (context.claimed.delete(connection)) {
+            context.claimed.add(lease.checkout);
+        }
+
+        return lease.checkout;
     }
 
     async claimFresh(): Promise<Connection> {
@@ -618,7 +743,10 @@ export class AsyncPgPool {
                 try {
                     await client.query(query);
 
-                    return (context.sharedTransaction = client);
+                    // A handle of its own, even on the primary connection: the transaction ends at
+                    // commit or rollback while the connection may stay with the context, and
+                    // whoever kept the transaction must not be able to write outside of it.
+                    return (context.sharedTransaction = this.handOut(supervisionOf(client).lease, 'transaction'));
                 } catch (e) {
                     await this.doRelease(client, e);
                     throw e;
@@ -664,32 +792,36 @@ export class AsyncPgPool {
         }
 
         // Whatever happens from here, this transaction is over, and until the command proves
-        // otherwise it ended in failure.
+        // otherwise it ended in failure. Nothing may run through its handle any more.
         context.sharedTransaction = undefined;
-        supervisionOf(client).transactionOutcome = command === 'ROLLBACK' ? 'rolled-back' : 'commit-failed';
+        const transaction = supervisionOf(client);
+        transaction.revoked = true;
+        transaction.transactionOutcome = command === 'ROLLBACK' ? 'rolled-back' : 'commit-failed';
+        const {lease} = transaction;
+        const checkout = lease.checkout;
         let discarded = false;
 
         try {
             // The command tag reports what the server actually did. A COMMIT sent to a transaction
             // that failed earlier is answered with `ROLLBACK`: every statement in it was discarded.
             // The tag is the only place that distinction exists — the query itself succeeds.
-            const result = await client.query(command);
+            const result = await checkout.query(command);
             discarded = command === 'COMMIT' && result.command !== 'COMMIT';
 
             if (command === 'COMMIT' && !discarded) {
-                supervisionOf(client).transactionOutcome = 'committed';
+                transaction.transactionOutcome = 'committed';
             }
 
             // A finalised transaction leaves a clean session, whatever the unit of work threw, and
             // so does a COMMIT the server discarded. An error that concerns the connection makes the
             // command itself fail, which destroys the connection below.
-            await this.release(client);
+            await this.release(checkout);
         } catch (e) {
             // The release above may already have handed the connection back before failing; only
             // release what is still ours, so the caller keeps the error that actually matters
             // instead of a double-release complaint from the driver.
-            if (!supervisionOf(client).handedBack) {
-                await this.doRelease(client, e);
+            if (!lease.handedBack) {
+                await this.doRelease(lease.checkout, e);
             }
 
             throw e;
@@ -710,21 +842,34 @@ export class AsyncPgPool {
      */
     async release(connection: Connection, err: unknown = undefined): Promise<void> {
         const context = this.resolveContext();
+        const state = supervisionIfAny(connection);
 
         if (connection === context.sharedTransaction) {
             return;
         }
 
-        if (connection === context.primaryConnection && this.keepPrimaryConnection) {
+        if (state?.revoked) {
+            // Released before — parked as idle, or ended with its transaction — and since then
+            // possibly handed to someone else in this context.
+            throw UnableToReleaseConnection.becauseItWasAlreadyReleased();
+        }
+
+        // A transaction's handle stands for the checkout the transaction runs on.
+        const checkout = state?.lease.checkout ?? connection;
+
+        if (checkout === context.primaryConnection && this.keepPrimaryConnection) {
             return;
         }
 
         if (err === undefined && this.keepConnections > context.free.length) {
+            // Parked under a new handle, so the caller that released it cannot use it alongside
+            // the next caller in this context that claims it.
+            const parked = this.reissue(context, checkout);
             const timeout =
                 this.maxIdleMs === undefined
                     ? undefined
                     : setTimeout(() => {
-                          const index = context.free.findIndex(([c]) => c === connection);
+                          const index = context.free.findIndex(([c]) => c === parked);
 
                           if (index < 0) {
                               return;
@@ -735,11 +880,11 @@ export class AsyncPgPool {
                           // connection per idle period. A timer has nobody to report to, so a failing
                           // release hook is swallowed here rather than becoming a fatal unhandled
                           // rejection; a caller-driven release still surfaces it.
-                          void this.doRelease(connection).catch(() => {});
+                          void this.doRelease(parked).catch(() => {});
                       }, this.maxIdleMs);
-            context.free.push([connection, timeout]);
+            context.free.push([parked, timeout]);
         } else {
-            return this.doRelease(connection, err);
+            return this.doRelease(checkout, err);
         }
     }
 
@@ -747,23 +892,23 @@ export class AsyncPgPool {
      * Hand a connection back to the driver's pool, exactly once.
      */
     private async doRelease(connection: Connection, err: unknown = undefined): Promise<void> {
-        const state = supervisionOf(connection);
+        const {lease} = supervisionOf(connection);
 
-        if (state.handedBack) {
+        if (lease.handedBack) {
             // Releasing a connection twice is a caller mistake worth hearing about, so let the
             // driver report it. Going through its single-use function keeps that signal without
             // running the release hook a second time.
-            state.handBack(undefined);
+            lease.handBack(undefined);
 
             return;
         }
 
-        if (state.releasing) {
+        if (lease.releasing) {
             return;
         }
 
-        state.releasing = true;
-        this.forget(connection);
+        lease.releasing = true;
+        this.forget(lease);
 
         const onRelease = this.onRelease;
         let hookError: unknown = undefined;
@@ -771,15 +916,16 @@ export class AsyncPgPool {
         if (onRelease && (err === undefined || this.releaseHookOnError)) {
             try {
                 // Still usable on purpose: a reset hook has to be able to query the connection.
-                await onRelease(connection, err);
+                await onRelease(lease.checkout, err);
             } catch (e) {
                 hookError = e;
             }
         }
 
-        state.handedBack = true;
+        // From here on every handle on this checkout refuses to query.
+        lease.handedBack = true;
         const reportedError = hookError ?? err;
-        state.handBack(
+        lease.handBack(
             reportedError === undefined
                 ? undefined
                 : reportedError instanceof Error
@@ -793,10 +939,10 @@ export class AsyncPgPool {
     }
 
     /**
-     * Drop every reference this context holds to a connection, so nothing hands it out again once
-     * it has gone back to the pool.
+     * Drop every reference this context holds to a checkout, so nothing hands it out again once it
+     * has gone back to the pool.
      */
-    private forget(connection: Connection): void {
+    private forget(lease: ConnectionLease): void {
         // Not `resolveContext`: forgetting has to keep working while a context is being flushed.
         const context = this.currentContext();
 
@@ -804,20 +950,23 @@ export class AsyncPgPool {
             return;
         }
 
-        context.claimed.delete(connection);
+        const isThisCheckout = (connection: Connection | undefined): boolean =>
+            connection !== undefined && supervisionIfAny(connection)?.lease === lease;
 
-        const index = context.free.findIndex(([c]) => c === connection);
+        context.claimed.delete(lease.checkout);
+
+        const index = context.free.findIndex(([c]) => isThisCheckout(c));
 
         if (index >= 0) {
             clearTimeout(context.free[index]![1]);
             context.free.splice(index, 1);
         }
 
-        if (context.primaryConnection === connection) {
+        if (isThisCheckout(context.primaryConnection)) {
             context.primaryConnection = undefined;
         }
 
-        if (context.sharedTransaction === connection) {
+        if (isThisCheckout(context.sharedTransaction)) {
             context.sharedTransaction = undefined;
         }
     }
@@ -846,6 +995,33 @@ class UnableToReleaseConnection extends StandardError {
         new UnableToReleaseConnection(
             'Unable to release connection: it was not claimed through this pool',
             'async-pg-pool.connection_not_supervised',
+        );
+
+    static becauseItWasAlreadyReleased = () =>
+        new UnableToReleaseConnection(
+            'Unable to release connection: it was already released',
+            'async-pg-pool.connection_already_released',
+        );
+}
+
+/**
+ * Reported, the way the driver reports a failing query, when a query is issued through a
+ * connection that is no longer the caller's to use. Running it would land outside of the
+ * transaction it was meant for, or on a connection the driver has since handed to someone else.
+ */
+export class UnableToUseConnection extends StandardError {
+    static becauseItWasReleased = () =>
+        new UnableToUseConnection(
+            'Unable to use connection: it was released, and may already be serving another caller. '
+                + 'Claim a connection for the work instead of keeping one around.',
+            'async-pg-pool.connection_was_released',
+        );
+
+    static becauseItsTransactionEnded = () =>
+        new UnableToUseConnection(
+            'Unable to use connection: the transaction it belongs to was already committed or rolled back, '
+                + 'so the query would run outside of it.',
+            'async-pg-pool.transaction_has_ended',
         );
 }
 
