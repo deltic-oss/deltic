@@ -1,6 +1,6 @@
 ---
-"@deltic/messaging": patch
-"@deltic/stack": patch
+"@deltic/messaging": major
+"@deltic/stack": major
 ---
 
 Recover from a dropped AMQP connection instead of retrying on dead channels for ever, and give up on

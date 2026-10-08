@@ -1,5 +1,5 @@
 ---
-"@deltic/mutex": patch
+"@deltic/mutex": major
 ---
 
 Make mutual exclusion hold, make timeouts mean what they say, and stop stale handles from
