@@ -1,6 +1,7 @@
-import type {KeyValueStore, ValueType} from './index.js';
+import {type KeyType, type KeyValueStore, SortingKeyNormalisation, type ValueType} from './index.js';
 import {KeyValueStoreUsingMemory} from './memory.js';
 import {createKeyValueSchemaQuery, KeyValueStoreUsingPg} from './pg.js';
+import {objectHashKeyConversion} from './object-hash.js';
 import {Pool} from 'pg';
 import {AsyncPgPool} from '@deltic/async-pg-pool';
 import {ValueReadWriterUsingMemory} from '@deltic/context';
@@ -213,6 +214,39 @@ describe('KeyValueStoreUsingMemory', () => {
         expect(retrieved).toBe('stored');
     });
 
+    test('a custom key normalisation decides which keys address the same entry', async () => {
+        const caseInsensitiveStore = new KeyValueStoreUsingMemory<string, ExampleValue>({
+            keyNormalisation: {normalise: key => key.toLowerCase()},
+        });
+
+        await caseInsensitiveStore.persist('Key', 'value');
+
+        expect(await caseInsensitiveStore.retrieve('KEY')).toBe('value');
+    });
+});
+
+describe('SortingKeyNormalisation', () => {
+    const normalisation = new SortingKeyNormalisation<KeyType>();
+
+    test('sorts the properties of an object key and of the objects nested in it', () => {
+        const normalised = normalisation.normalise({second: {d: 4, c: 3}, first: 1});
+
+        expect(JSON.stringify(normalised)).toEqual('{"first":1,"second":{"c":3,"d":4}}');
+    });
+
+    test('leaves arrays as they are', () => {
+        const normalised = normalisation.normalise({list: [{b: 2, a: 1}, 3, 2]});
+
+        expect(JSON.stringify(normalised)).toEqual('{"list":[{"b":2,"a":1},3,2]}');
+    });
+
+    test('leaves anything other than a plain object as it is', () => {
+        const date = new Date('2026-10-06T00:00:00Z');
+
+        expect(normalisation.normalise(date)).toBe(date);
+        expect(normalisation.normalise('key')).toBe('key');
+        expect(normalisation.normalise(null)).toBe(null);
+    });
 });
 
 describe('KeyValueStoreUsingPg', () => {
@@ -240,6 +274,61 @@ describe('KeyValueStoreUsingPg', () => {
         await ownPool.end();
     });
 
+    describe('keys', () => {
+        test('a custom key normalisation decides which keys address the same entry', async () => {
+            const caseInsensitiveStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyNormalisation: {normalise: key => key.toLowerCase()},
+            });
+
+            await caseInsensitiveStore.persist('Key', 'value');
+
+            expect(await caseInsensitiveStore.retrieve('KEY')).toBe('value');
+        });
+
+        test('a custom key conversion receives the normalised key', async () => {
+            const prefixedStore = new KeyValueStoreUsingPg<{first: number; second: number}, ExampleValue, string>(
+                ownAsyncPool,
+                {
+                    tableName,
+                    keyConversion: key => `prefixed:${JSON.stringify(key)}`,
+                },
+            );
+
+            await prefixedStore.persist({second: 2, first: 1}, 'value');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName}`);
+            expect(rows.map(row => row.key)).toEqual(['prefixed:{"first":1,"second":2}']);
+        });
+
+        test('objectHashKeyConversion stores an object key as a hash of a fixed length', async () => {
+            const hashedStore = new KeyValueStoreUsingPg<{description: string}, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyConversion: objectHashKeyConversion,
+            });
+            const key = {description: 'x'.repeat(300)};
+
+            await hashedStore.persist(key, 'value');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName}`);
+            expect(rows.map(row => row.key.length)).toEqual([128]);
+            expect(await hashedStore.retrieve(key)).toBe('value');
+        });
+
+        test('objectHashKeyConversion stores a scalar key as its string form', async () => {
+            const hashedStore = new KeyValueStoreUsingPg<string | number, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyConversion: objectHashKeyConversion,
+            });
+
+            await hashedStore.persist('readable-key', 'string');
+            await hashedStore.persist(42, 'number');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName} ORDER BY "key"`);
+            expect(rows.map(row => row.key)).toEqual(['42', 'readable-key']);
+        });
+    });
+
     describe('object keys', () => {
         type ObjectKey = {first: number; second: number};
         let pgStore: KeyValueStore<ObjectKey, ExampleValue>;
@@ -256,6 +345,19 @@ describe('KeyValueStoreUsingPg', () => {
             expect(await pgStore.retrieve({first: 3, second: 4})).toBe('three-four');
         });
 
+        test('object keys are matched regardless of property order', async () => {
+            await pgStore.persist({first: 1, second: 2}, 'stored');
+
+            expect(await pgStore.retrieve({second: 2, first: 1})).toBe('stored');
+        });
+
+        test('object keys are removed regardless of property order', async () => {
+            await pgStore.persist({first: 1, second: 2}, 'stored');
+
+            await pgStore.remove({second: 2, first: 1});
+
+            expect(await pgStore.retrieve({first: 1, second: 2})).toBeUndefined();
+        });
     });
 
     describe('tenant scoping', () => {
