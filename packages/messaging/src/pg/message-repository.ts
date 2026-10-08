@@ -202,7 +202,7 @@ export class MessageRepositoryUsingPg<Stream extends StreamDefinition> implement
 
         const {rows} = await connection.query<MessageRecord<Stream>>(
             `
-            SELECT DISTINCT ON (aggregate_root_id) aggregate_root_id, payload, version FROM ${this.tableName} ${whereClause}
+            SELECT DISTINCT ON (aggregate_root_id) id, aggregate_root_id, payload, version FROM ${this.tableName} ${whereClause}
             ORDER BY aggregate_root_id, version ${whichMessage === 'last' ? 'DESC' : 'ASC'}
             LIMIT $${values.length}
         `,
