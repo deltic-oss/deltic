@@ -290,6 +290,47 @@ describe('KeyValueStoreUsingPg', () => {
             expect(rows.map(row => row.tenant_id)).toEqual([tenantA, tenantB]);
         });
 
+        test.each([
+            ['retrieving', (target: KeyValueStore<string, ExampleValue>) => target.retrieve('key')],
+            ['removing', (target: KeyValueStore<string, ExampleValue>) => target.remove('key')],
+            ['clearing', (target: KeyValueStore<string, ExampleValue>) => target.clear()],
+        ])('%s requires a resolvable tenant', async (_name, operation) => {
+            tenantContext.forget();
+
+            await expect(operation(tenantStore)).rejects.toThrow();
+        });
+
+        test('retrieving only returns the value of the current tenant', async () => {
+            await tenantStore.persist('shared-key', 'tenant-a-value');
+
+            tenantContext.use(tenantB);
+
+            expect(await tenantStore.retrieve('shared-key')).toBeUndefined();
+        });
+
+        test('removing only removes the value of the current tenant', async () => {
+            await tenantStore.persist('shared-key', 'tenant-a-value');
+            tenantContext.use(tenantB);
+            await tenantStore.persist('shared-key', 'tenant-b-value');
+
+            await tenantStore.remove('shared-key');
+
+            const {rows} = await ownPool.query<{tenant_id: string}>(
+                `SELECT tenant_id FROM ${tableName} WHERE "key" = 'shared-key'`,
+            );
+            expect(rows.map(row => row.tenant_id)).toEqual([tenantA]);
+        });
+
+        test('clearing only removes the entries of the current tenant', async () => {
+            await tenantStore.persist('key-a', 'tenant-a-value');
+            tenantContext.use(tenantB);
+            await tenantStore.persist('key-b', 'tenant-b-value');
+
+            await tenantStore.clear();
+
+            const {rows} = await ownPool.query<{tenant_id: string}>(`SELECT tenant_id FROM ${tableName}`);
+            expect(rows.map(row => row.tenant_id)).toEqual([tenantA]);
+        });
     });
 
     describe('connection handling', () => {
@@ -315,5 +356,51 @@ describe('KeyValueStoreUsingPg', () => {
             }
         });
 
+        test('clear returns the connection it claimed to the pool', async () => {
+            const releaseSpy = vi.spyOn(ownAsyncPool, 'release');
+
+            try {
+                await pgStore.clear();
+
+                expect(releaseSpy).toHaveBeenCalledTimes(1);
+            } finally {
+                releaseSpy.mockRestore();
+            }
+        });
+
+    });
+});
+
+describe('KeyValueStoreUsingPg within a transaction', () => {
+    const tableName = 'test__kv_store_transactions';
+    let ownPool: Pool;
+    let ownAsyncPool: AsyncPgPool;
+    let pgStore: KeyValueStore<string, ExampleValue>;
+
+    beforeAll(async () => {
+        ownPool = new Pool({...pgTestCredentials, max: 2});
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.query(createKeyValueSchemaQuery(tableName));
+    });
+
+    beforeEach(() => {
+        ownAsyncPool = new AsyncPgPool(ownPool);
+        pgStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {tableName});
+    });
+
+    afterEach(async () => {
+        await ownAsyncPool.flush();
+        await ownPool.query(`TRUNCATE TABLE ${tableName}`);
+    });
+
+    afterAll(async () => {
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.end();
+    });
+
+    test('a value can be persisted inside an isolated transaction', async () => {
+        await expect(
+            ownAsyncPool.runInIsolatedTransaction(() => pgStore.persist('isolated', 'value')),
+        ).resolves.toBeUndefined();
     });
 });

@@ -1,4 +1,5 @@
 import type {KeyType, KeyValueStore, ValueType, KeyConversion} from './index.js';
+import type {QueryResult, QueryResultRow} from 'pg';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {ValueReader} from '@deltic/context';
 import type {IdConversion} from '@deltic/uid';
@@ -43,9 +44,8 @@ export class KeyValueStoreUsingPg<
     }
 
     async persist(key: Key, value: Value): Promise<void> {
-        const connection = await this.pool.primary();
         const resolvedKey = this.keyConversion(key);
-        const tenantId = this.tenantContext?.mustResolve();
+        const tenantId = this.databaseTenantId();
         const values: any[] = [resolvedKey, {value}];
         const references: string[] = ['$1', '$2'];
         const uniqueColumns = ['"key"'];
@@ -53,57 +53,80 @@ export class KeyValueStoreUsingPg<
         if (tenantId !== undefined) {
             references.push('$3');
             uniqueColumns.unshift('tenant_id');
-            values.unshift(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
+            values.unshift(tenantId);
         }
 
-        try {
-            await connection.query(
-                `
-                INSERT INTO ${this.tableName} (${uniqueColumns.join(', ')}, "value")
-                VALUES (${references.join(', ')}) ON CONFLICT (tenant_id, "key") DO
-                UPDATE set "value" = EXCLUDED."value"
-            `,
-                values,
-            );
-        } finally {
-            await this.pool.release(connection);
-        }
+        await this.query(
+            `
+            INSERT INTO ${this.tableName} (${uniqueColumns.join(', ')}, "value")
+            VALUES (${references.join(', ')}) ON CONFLICT (tenant_id, "key") DO
+            UPDATE set "value" = EXCLUDED."value"
+        `,
+            values,
+        );
     }
 
     async retrieve(key: Key): Promise<Value | undefined> {
-        const conn = await this.pool.primary();
-        const resolvedKey = this.keyConversion(key);
+        const {condition, values} = this.keyCondition(this.keyConversion(key));
+        const result = await this.query<StoredRecord<Value>>(
+            `
+            SELECT "value"
+            from ${this.tableName}
+            WHERE ${condition}
+            LIMIT 1`,
+            values,
+        );
 
-        try {
-            const result = await conn.query<StoredRecord<Value>>(
-                `
-                SELECT "value"
-                from ${this.tableName}
-                WHERE "key" = $1
-                LIMIT 1`,
-                [resolvedKey],
-            );
-
-            return result.rows[0]?.value?.value;
-        } finally {
-            await this.pool.release(conn);
-        }
+        return result.rows[0]?.value?.value;
     }
 
     async remove(key: Key): Promise<void> {
-        const conn = await this.pool.primary();
-        const resolvedKey = this.keyConversion(key);
-
-        try {
-            await conn.query(`DELETE FROM ${this.tableName} WHERE "key" = $1`, [resolvedKey]);
-        } finally {
-            await this.pool.release(conn);
-        }
+        const {condition, values} = this.keyCondition(this.keyConversion(key));
+        await this.query(`DELETE FROM ${this.tableName} WHERE ${condition}`, values);
     }
 
     async clear(): Promise<void> {
-        const conn = await this.pool.primary();
-        await conn.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+        const tenantId = this.databaseTenantId();
+
+        if (tenantId === undefined) {
+            await this.query(`DELETE FROM ${this.tableName}`);
+        } else {
+            await this.query(`DELETE FROM ${this.tableName} WHERE tenant_id = $1`, [tenantId]);
+        }
+    }
+
+    private keyCondition(resolvedKey: DatabaseKey): {condition: string; values: unknown[]} {
+        const tenantId = this.databaseTenantId();
+
+        if (tenantId === undefined) {
+            return {condition: '"key" = $1', values: [resolvedKey]};
+        }
+
+        return {condition: '"key" = $1 AND tenant_id = $2', values: [resolvedKey, tenantId]};
+    }
+
+    /**
+     * A store with a tenant context is scoped to the current tenant in every operation and refuses to
+     * operate when no tenant can be resolved.
+     */
+    private databaseTenantId(): string | number | undefined {
+        if (this.tenantContext === undefined) {
+            return undefined;
+        }
+
+        const tenantId = this.tenantContext.mustResolve();
+
+        return this.tenantIdConversion === undefined ? tenantId : this.tenantIdConversion.toDatabase(tenantId);
+    }
+
+    private async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []): Promise<QueryResult<Row>> {
+        const connection = await this.pool.primary();
+
+        try {
+            return await connection.query<Row>(sql, values);
+        } finally {
+            await this.pool.release(connection);
+        }
     }
 }
 

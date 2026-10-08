@@ -89,8 +89,9 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
     });
 
     afterEach(async () => {
-        await store.clear();
         await asyncPool.flush();
+        // clear() only reaches the current tenant, and tests switch tenants
+        await pool.query(`TRUNCATE TABLE ${testTableName}`);
     });
 
     afterAll(async () => {
@@ -208,6 +209,12 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
         expect(rows[0]?.likedLasagna).toBe(true);
     });
 
+    test('a record can be persisted inside an isolated transaction', async () => {
+        await asyncPool.runInIsolatedTransaction(() => store.persist(exampleIndex, example));
+
+        expect(await store.retrieve(exampleIndex)).toEqual(example);
+    });
+
     test('clearing the store removes every record', async () => {
         await store.persist(exampleIndex, example);
 
@@ -216,6 +223,34 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
         expect(await store.retrieve(exampleIndex)).toBeUndefined();
     });
 
+    test('clearing the store leaves the records of other tenants', async () => {
+        const firstTenant = tenantContext.mustResolve();
+        await store.persist(exampleIndex, example);
+        tenantContext.use(uuid.v7());
+        await store.persist(exampleIndex, example);
+
+        await store.clear();
+
+        const {rows} = await pool.query<{tenant_id: string}>(`SELECT tenant_id FROM ${testTableName}`);
+        expect(rows.map(row => row.tenant_id)).toEqual([firstTenant]);
+    });
+
+    test.each([
+        ['persist', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.persist(exampleIndex, example)],
+        ['retrieve', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.retrieve(exampleIndex)],
+        ['remove', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.remove(exampleIndex)],
+        ['clear', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.clear()],
+    ])('%s returns the connection it claimed to the pool', async (_name, operation) => {
+        const releaseSpy = vi.spyOn(asyncPool, 'release');
+
+        try {
+            await operation(store);
+
+            expect(releaseSpy).toHaveBeenCalledTimes(1);
+        } finally {
+            releaseSpy.mockRestore();
+        }
+    });
 });
 
 describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
@@ -271,6 +306,9 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
             [],
         );
 
+    const makeCamelCaseColumnStore = (): KeyValueStore<UserKey, User> =>
+        new KeyValueStoreWithColumnsUsingPg<UserKey, User>(ownAsyncPool, camelCaseTable, ['userId'], []);
+
     test('an identity column declared without a value conversion is written to the renamed column', async () => {
         const store = makeRenamedColumnStore();
 
@@ -280,6 +318,31 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
         expect(rows.map(row => row.user_id)).toEqual(['user-1']);
     });
 
+    test('retrieves a record whose identity column is declared without a value conversion', async () => {
+        const store = makeRenamedColumnStore();
+        const user: User = {userId: 'user-1', nickname: 'Alice'};
+        await store.persist({userId: 'user-1'}, user);
+
+        expect(await store.retrieve({userId: 'user-1'})).toEqual(user);
+    });
+
+    test('removes a record whose identity column is declared without a value conversion', async () => {
+        const store = makeRenamedColumnStore();
+        await store.persist({userId: 'user-1'}, {userId: 'user-1', nickname: 'Alice'});
+
+        await store.remove({userId: 'user-1'});
+
+        const {rows} = await ownPool.query(`SELECT user_id FROM ${snakeCaseTable}`);
+        expect(rows).toEqual([]);
+    });
+
+    test('supports an identity column whose name needs quoting', async () => {
+        const store = makeCamelCaseColumnStore();
+        const user: User = {userId: 'user-1', nickname: 'Alice'};
+        await store.persist({userId: 'user-1'}, user);
+
+        expect(await store.retrieve({userId: 'user-1'})).toEqual(user);
+    });
 });
 
 describe('KeyValueStoreWithColumnsUsingPg with a numeric tenant id', () => {
@@ -335,4 +398,30 @@ describe('KeyValueStoreWithColumnsUsingPg with a numeric tenant id', () => {
         expect(await store.retrieve({user_id: 'u1'})).toBeUndefined();
     });
 
+    test('reading under tenant zero does not return the records of another tenant', async () => {
+        await store.persist({user_id: 'u1'}, {user_id: 'u1', nickname: 'Seven'});
+
+        numericTenantContext.use(0);
+
+        expect(await store.retrieve({user_id: 'u1'})).toBeUndefined();
+    });
+
+    test('writing under tenant zero stores the record for tenant zero', async () => {
+        numericTenantContext.use(0);
+
+        await store.persist({user_id: 'u1'}, {user_id: 'u1', nickname: 'Zero'});
+
+        const {rows} = await ownPool.query<{tenant_id: number}>(`SELECT tenant_id FROM ${numericTenantTable}`);
+        expect(rows.map(row => row.tenant_id)).toEqual([0]);
+    });
+
+    test('removing under tenant zero leaves the records of another tenant', async () => {
+        await store.persist({user_id: 'u1'}, {user_id: 'u1', nickname: 'Seven'});
+        numericTenantContext.use(0);
+
+        await store.remove({user_id: 'u1'});
+
+        const {rows} = await ownPool.query<{tenant_id: number}>(`SELECT tenant_id FROM ${numericTenantTable}`);
+        expect(rows.map(row => row.tenant_id)).toEqual([7]);
+    });
 });
