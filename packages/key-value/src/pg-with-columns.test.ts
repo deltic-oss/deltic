@@ -306,6 +306,9 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
             [],
         );
 
+    const makeCamelCaseColumnStore = (): KeyValueStore<UserKey, User> =>
+        new KeyValueStoreWithColumnsUsingPg<UserKey, User>(ownAsyncPool, camelCaseTable, ['userId'], []);
+
     test('an identity column declared without a value conversion is written to the renamed column', async () => {
         const store = makeRenamedColumnStore();
 
@@ -315,6 +318,13 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
         expect(rows.map(row => row.user_id)).toEqual(['user-1']);
     });
 
+    test('supports an identity column whose name needs quoting', async () => {
+        const store = makeCamelCaseColumnStore();
+        const user: User = {userId: 'user-1', nickname: 'Alice'};
+        await store.persist({userId: 'user-1'}, user);
+
+        expect(await store.retrieve({userId: 'user-1'})).toEqual(user);
+    });
 });
 
 describe('KeyValueStoreWithColumnsUsingPg with a numeric tenant id', () => {
