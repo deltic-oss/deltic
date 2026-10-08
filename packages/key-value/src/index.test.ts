@@ -290,6 +290,47 @@ describe('KeyValueStoreUsingPg', () => {
             expect(rows.map(row => row.tenant_id)).toEqual([tenantA, tenantB]);
         });
 
+        test.each([
+            ['retrieving', (target: KeyValueStore<string, ExampleValue>) => target.retrieve('key')],
+            ['removing', (target: KeyValueStore<string, ExampleValue>) => target.remove('key')],
+            ['clearing', (target: KeyValueStore<string, ExampleValue>) => target.clear()],
+        ])('%s requires a resolvable tenant', async (_name, operation) => {
+            tenantContext.forget();
+
+            await expect(operation(tenantStore)).rejects.toThrow();
+        });
+
+        test('retrieving only returns the value of the current tenant', async () => {
+            await tenantStore.persist('shared-key', 'tenant-a-value');
+
+            tenantContext.use(tenantB);
+
+            expect(await tenantStore.retrieve('shared-key')).toBeUndefined();
+        });
+
+        test('removing only removes the value of the current tenant', async () => {
+            await tenantStore.persist('shared-key', 'tenant-a-value');
+            tenantContext.use(tenantB);
+            await tenantStore.persist('shared-key', 'tenant-b-value');
+
+            await tenantStore.remove('shared-key');
+
+            const {rows} = await ownPool.query<{tenant_id: string}>(
+                `SELECT tenant_id FROM ${tableName} WHERE "key" = 'shared-key'`,
+            );
+            expect(rows.map(row => row.tenant_id)).toEqual([tenantA]);
+        });
+
+        test('clearing only removes the entries of the current tenant', async () => {
+            await tenantStore.persist('key-a', 'tenant-a-value');
+            tenantContext.use(tenantB);
+            await tenantStore.persist('key-b', 'tenant-b-value');
+
+            await tenantStore.clear();
+
+            const {rows} = await ownPool.query<{tenant_id: string}>(`SELECT tenant_id FROM ${tableName}`);
+            expect(rows.map(row => row.tenant_id)).toEqual([tenantA]);
+        });
     });
 
     describe('connection handling', () => {

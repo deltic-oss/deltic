@@ -58,11 +58,11 @@ export class KeyValueStoreWithColumnsUsingPg<
         const references: string[] = [];
         const values: any[] = [];
 
-        const tenantId = this.tenantContext?.mustResolve();
+        const tenantId = this.databaseTenantId();
 
-        if (tenantId) {
+        if (tenantId !== undefined) {
             identityColumns.push('tenant_id');
-            values.push(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
+            values.push(tenantId);
             references.push(`$${values.length}`);
         }
 
@@ -98,10 +98,10 @@ export class KeyValueStoreWithColumnsUsingPg<
     async retrieve(key: Key): Promise<Value | undefined> {
         const whereClauses: string[] = [];
         const values: any[] = [];
-        const tenantId = this.tenantContext?.mustResolve();
+        const tenantId = this.databaseTenantId();
 
-        if (tenantId) {
-            values.push(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
+        if (tenantId !== undefined) {
+            values.push(tenantId);
             whereClauses.push(`tenant_id = $${values.length}`);
         }
 
@@ -129,10 +129,10 @@ export class KeyValueStoreWithColumnsUsingPg<
     async remove(key: Key): Promise<void> {
         const whereClauses: string[] = [];
         const values: any[] = [];
-        const tenantId = this.tenantContext?.mustResolve();
+        const tenantId = this.databaseTenantId();
 
-        if (tenantId) {
-            values.push(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
+        if (tenantId !== undefined) {
+            values.push(tenantId);
             whereClauses.push(`tenant_id = $${values.length}`);
         }
 
@@ -155,7 +155,27 @@ export class KeyValueStoreWithColumnsUsingPg<
     }
 
     async clear(): Promise<void> {
-        await this.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+        const tenantId = this.databaseTenantId();
+
+        if (tenantId === undefined) {
+            await this.query(`DELETE FROM ${this.tableName}`);
+        } else {
+            await this.query(`DELETE FROM ${this.tableName} WHERE tenant_id = $1`, [tenantId]);
+        }
+    }
+
+    /**
+     * A store with a tenant context is scoped to the current tenant in every operation and refuses to
+     * operate when no tenant can be resolved. Tenant ids such as `0` and `''` are scoped like any other.
+     */
+    private databaseTenantId(): string | number | undefined {
+        if (this.tenantContext === undefined) {
+            return undefined;
+        }
+
+        const tenantId = this.tenantContext.mustResolve();
+
+        return this.tenantIdConversion === undefined ? tenantId : this.tenantIdConversion.toDatabase(tenantId);
     }
 
     private async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []): Promise<QueryResult<Row>> {

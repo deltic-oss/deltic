@@ -72,6 +72,10 @@ const store = new KeyValueStoreUsingPg<string, Settings, string, TenantId>(async
 });
 ```
 
+A store with a `tenantContext` scopes every operation (`persist`, `retrieve`, `remove` and `clear`) to the
+tenant the context resolves to, and rejects the operation when no tenant can be resolved. The same key can
+therefore hold a different value for every tenant. A store without a `tenantContext` is not tenant scoped.
+
 #### Custom Key Conversion
 
 Transform keys before storage:
@@ -106,6 +110,10 @@ await store.persist(
 );
 ```
 
+The constructor optionally takes a tenant context and a tenant id conversion as its fifth and sixth
+arguments. Tenant scoping then works as for `KeyValueStoreUsingPg`, using a `tenant_id` column that must be
+part of the table's unique key.
+
 ## API Reference
 
 ### `KeyValueStore<Key, Value>` (interface)
@@ -115,7 +123,7 @@ await store.persist(
 | `persist(key, value)` | Stores a key-value pair (upserts on conflict) |
 | `retrieve(key)` | Returns the value or `undefined` if not found |
 | `remove(key)` | Deletes a key-value pair |
-| `clear()` | Removes all entries |
+| `clear()` | Removes all entries; for a tenant-scoped store, those of the current tenant |
 
 ### `createKeyValueSchemaQuery(tableName, ifNotExists?)`
 
