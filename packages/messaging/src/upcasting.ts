@@ -73,7 +73,7 @@ export class SchemaVersionMessageDecorator<
 
     decorate(messages: MessagesFrom<Stream>): MessagesFrom<Stream> {
         return messages.map(message => {
-            const upcasters = this.upcasters[message.type];
+            const upcasters = upcastersFor(this.upcasters, message.type);
 
             if (upcasters === undefined) {
                 return message;
@@ -87,12 +87,24 @@ export class SchemaVersionMessageDecorator<
     }
 }
 
+/**
+ * The upcasters registered for a message type. The type comes off the wire, so it is looked up as
+ * an own property: a type named after something every object has (`constructor`, `toString`) is an
+ * unknown type, not a lookup into `Object.prototype`.
+ */
+function upcastersFor<Stream extends VersionedStreamDefinition<Stream>>(
+    upcasters: UpcastersForVersionedStream<Stream>,
+    type: AnyMessageFrom<Stream>['type'],
+): UpcastersForVersionedStream<Stream>[keyof UpcastersForVersionedStream<Stream>] | undefined {
+    return Object.hasOwn(upcasters, type) ? upcasters[type] : undefined;
+}
+
 function upcastMessage<Stream extends VersionedStreamDefinition<Stream>>(
     message: AnyMessageFrom<Stream>,
     upcasters: UpcastersForVersionedStream<Stream>,
 ): AnyMessageFrom<Stream> {
     let version = Number(message.headers.schema_version ?? 0);
-    const typeUpcasters = upcasters[message.type];
+    const typeUpcasters = upcastersFor(upcasters, message.type);
 
     if (typeUpcasters === undefined) {
         return message;
