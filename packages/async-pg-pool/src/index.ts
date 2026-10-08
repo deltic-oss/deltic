@@ -363,6 +363,8 @@ export class AsyncPgPool {
 
         try {
             await client.query(command);
+            // release() keeps the active transaction's connection, so the transaction has to be over first.
+            context.sharedTransaction = undefined;
             await this.release(client, error);
         } catch (e) {
             await this.doRelease(client, e);
@@ -373,8 +375,18 @@ export class AsyncPgPool {
         }
     }
 
+    /**
+     * Hands a connection back. A connection the context still needs stays with it, whatever the
+     * caller reports: the kept primary connection, and the connection of the active transaction,
+     * which goes back once the transaction is committed or rolled back. Whether a failure condemns
+     * that connection is for the transaction's owner to decide when it finalises the transaction.
+     */
     async release(connection: Connection, err: unknown = undefined): Promise<void> {
         const context = this.resolveContext();
+
+        if (connection === context.sharedTransaction) {
+            return;
+        }
 
         if (connection === context.primaryConnection && this.keepPrimaryConnection) {
             return;
