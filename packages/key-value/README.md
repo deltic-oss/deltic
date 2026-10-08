@@ -42,6 +42,22 @@ await store.remove('user-1');
 await store.clear();
 ```
 
+### Key Normalisation
+
+Both stores normalise a key before they use it, so keys that are equal as values address the same
+entry. The default, `SortingKeyNormalisation`, sorts the properties of an object key and of every
+object nested in it: `{first: 1, second: 2}` and `{second: 2, first: 1}` are the same key. Arrays keep
+their order, and anything other than a plain object is used as it is.
+
+Pass a `KeyNormalisation` of your own as the `keyNormalisation` option to decide which keys are the
+same:
+
+```typescript
+const store = new KeyValueStoreUsingMemory<string, {name: string}>({
+    keyNormalisation: {normalise: key => key.toLowerCase()},
+});
+```
+
 ### PostgreSQL Store
 
 ```typescript
@@ -87,6 +103,11 @@ const store = new KeyValueStoreUsingPg<UserId, Profile, string>(asyncPool, {
 });
 ```
 
+The conversion receives the normalised key. Without one, the store hands the key to `pg` as it is,
+which stores an object key as its JSON; that has to fit the `key` column's 255 characters.
+Interpolating an object key (`` key => `prefix:${key}` ``) turns every one of them into
+`prefix:[object Object]`.
+
 ### PostgreSQL with Columns
 
 For cases where you want specific object properties stored as separate database columns (enabling queries and indexes) while preserving the full object as a JSON payload:
@@ -124,6 +145,14 @@ part of the table's unique key.
 | `retrieve(key)` | Returns the value or `undefined` if not found |
 | `remove(key)` | Deletes a key-value pair |
 | `clear()` | Removes all entries; for a tenant-scoped store, those of the current tenant |
+
+### `KeyNormalisation<Key>` (interface)
+
+| Method | Description |
+|--------|-------------|
+| `normalise(key)` | Returns the form the store addresses the key by |
+
+`SortingKeyNormalisation` is the default: it sorts the properties of plain objects, recursively.
 
 ### `createKeyValueSchemaQuery(tableName, ifNotExists?)`
 
