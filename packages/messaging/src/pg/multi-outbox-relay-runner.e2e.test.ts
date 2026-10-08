@@ -4,7 +4,7 @@ import {pgTestCredentials} from '../../../pg-credentials.js';
 import {OutboxRepositoryUsingPg} from './outbox-repository.js';
 import {NotifyingOutboxDecoratorUsingPg} from './notifying-outbox-decorator.js';
 import {OutboxRelay} from '@deltic/messaging/outbox';
-import {MultiOutboxRelayRunner} from './multi-outbox-relay-runner.js';
+import {MultiOutboxRelayRunner, type RelayFailure} from './multi-outbox-relay-runner.js';
 import {createMessageConsumer, messageFactory, withoutHeaders} from '@deltic/messaging/helpers';
 import {ConsumingMessageDispatcher} from '@deltic/messaging/consuming-message-dispatcher';
 import {StaticMutexUsingMemory} from '@deltic/mutex/static-memory';
@@ -241,34 +241,188 @@ describe('MultiOutboxRelayRunner', () => {
         await startPromise;
     });
 
-    test('relay errors reject the start promise', async () => {
+    test('a failed batch is retried after a backoff while the other outboxes keep relaying', async () => {
         // arrange
-        const relayError = new Error('consumer exploded');
-        const consumer = createMessageConsumer<StreamA>(async () => {
-            throw relayError;
-        });
-        runnerPool = new AsyncPgPool(pgPool);
-        const relay = new OutboxRelay(
-            new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA),
-            new ConsumingMessageDispatcher([consumer]),
-        );
+        const consumedA: AnyMessageFrom<StreamA>[] = [];
+        const consumedB: AnyMessageFrom<StreamB>[] = [];
+        const failures: RelayFailure[] = [];
+        const waitGroup = new WaitGroup();
+        let attemptsA = 0;
+        const consumerA = createMessageConsumer<StreamA>(async (message) => {
+            attemptsA++;
 
+            if (attemptsA === 1) {
+                throw new Error('the broker is briefly unavailable');
+            }
+
+            consumedA.push(message);
+            waitGroup.done();
+        });
+        const consumerB = createMessageConsumer<StreamB>(async (message) => {
+            consumedB.push(message);
+            waitGroup.done();
+        });
+        waitGroup.add(2);
+        await new OutboxRepositoryUsingPg<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        await new OutboxRepositoryUsingPg<StreamB>(testPool, tableB).persist([createMessageB('foo', 'bar')]);
+        runnerPool = new AsyncPgPool(pgPool);
         runner = new MultiOutboxRelayRunner(
             runnerPool,
             new StaticMutexUsingMemory(),
-            {[tableA]: relay},
-            {channelName, pollIntervalMs: 60_000},
+            {
+                [tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumerA])),
+                [tableB]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamB>(runnerPool, tableB), new ConsumingMessageDispatcher([consumerB])),
+            },
+            {channelName, pollIntervalMs: 200, onRelayFailure: failure => failures.push(failure)},
         );
 
-        const startPromise = runner.start();
-        await wait(500);
-
         // act
-        const testOutbox = createNotifyingOutbox<StreamA>(testPool, tableA);
-        await testOutbox.persist([createMessageA('ping', 1)]);
+        const started = runner.start();
 
         // assert
-        await expect(startPromise).rejects.toThrow('consumer exploded');
+        await waitGroup.wait(5000);
+        expect(consumedA.map(withoutHeaders)).toEqual([createMessageA('ping', 1)]);
+        expect(consumedB.map(withoutHeaders)).toEqual([createMessageB('foo', 'bar')]);
+        expect(failures.map(({identifier, consecutiveFailures, retryInMs}) => ({identifier, consecutiveFailures, retryInMs}))).toEqual([
+            {identifier: tableA, consecutiveFailures: 1, retryInMs: 200},
+        ]);
+        await runner.stop();
+        await expect(started).resolves.toBeUndefined();
+    });
+
+    test('the wait doubles with every failure in a row, up to the ceiling, and starts over after a success', async () => {
+        // arrange
+        const failures: RelayFailure[] = [];
+        const outcomes = ['fail', 'fail', 'fail', 'succeed', 'fail', 'succeed'];
+        const handled = new WaitGroup();
+        handled.add(2);
+        const outbox = new OutboxRepositoryUsingPg<StreamA>(testPool, tableA);
+        const consumer = createMessageConsumer<StreamA>(async (message) => {
+            if (outcomes.shift() === 'fail') {
+                throw new Error('the broker is briefly unavailable');
+            }
+
+            handled.done();
+
+            if (message.type === 'ping') {
+                // the next message only arrives once the first one got through
+                void outbox.persist([createMessageA('pong', 2)]);
+            }
+        });
+        await outbox.persist([createMessageA('ping', 1)]);
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(
+            runnerPool,
+            new StaticMutexUsingMemory(),
+            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {channelName, pollIntervalMs: 50, failureBackoffCeilingMs: 150, onRelayFailure: failure => failures.push(failure)},
+        );
+
+        // act
+        void runner.start();
+
+        // assert
+        await handled.wait(5000);
+        expect(failures.map(({consecutiveFailures, retryInMs}) => ({consecutiveFailures, retryInMs}))).toEqual([
+            {consecutiveFailures: 1, retryInMs: 50},
+            {consecutiveFailures: 2, retryInMs: 100},
+            {consecutiveFailures: 3, retryInMs: 150},
+            {consecutiveFailures: 1, retryInMs: 50},
+        ]);
+    });
+
+    test('a notification does not cut a backoff short', async () => {
+        // arrange
+        const attemptedAt: number[] = [];
+        const consumed = new WaitGroup();
+        consumed.add(2);
+        const consumer = createMessageConsumer<StreamA>(async () => {
+            attemptedAt.push(Date.now());
+
+            if (attemptedAt.length === 1) {
+                throw new Error('the broker is briefly unavailable');
+            }
+
+            consumed.done();
+        });
+        await new OutboxRepositoryUsingPg<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        const failed = Promise.withResolvers<void>();
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(
+            runnerPool,
+            new StaticMutexUsingMemory(),
+            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {channelName, pollIntervalMs: 1000, onRelayFailure: () => failed.resolve()},
+        );
+        void runner.start();
+        await failed.promise;
+
+        // act
+        await createNotifyingOutbox<StreamA>(testPool, tableA).persist([createMessageA('pong', 2)]);
+
+        // assert
+        await consumed.wait(5000);
+        expect(attemptedAt[1] - attemptedAt[0]).toBeGreaterThanOrEqual(950);
+    });
+
+    test('a failure that cannot be recovered from ends the run, and start() rejects with it', async () => {
+        // arrange
+        const failures: RelayFailure[] = [];
+        const brokerGone = Object.assign(new Error('the broker is not coming back'), {isUnrecoverable: true as const});
+        const consumer = createMessageConsumer<StreamA>(async () => {
+            throw brokerGone;
+        });
+        await new OutboxRepositoryUsingPg<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(
+            runnerPool,
+            new StaticMutexUsingMemory(),
+            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {channelName, pollIntervalMs: 50, onRelayFailure: failure => failures.push(failure)},
+        );
+
+        // act
+        const started = runner.start();
+
+        // assert
+        await expect(started).rejects.toBe(brokerGone);
+        expect(failures).toEqual([]);
+    });
+
+    test('a failing report does not stop the retries', async () => {
+        // arrange
+        const consumed = Promise.withResolvers<void>();
+        let attempts = 0;
+        const consumer = createMessageConsumer<StreamA>(async () => {
+            attempts++;
+
+            if (attempts === 1) {
+                throw new Error('the broker is briefly unavailable');
+            }
+
+            consumed.resolve();
+        });
+        await new OutboxRepositoryUsingPg<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(
+            runnerPool,
+            new StaticMutexUsingMemory(),
+            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {
+                channelName,
+                pollIntervalMs: 50,
+                onRelayFailure: () => {
+                    throw new Error('the logger is down');
+                },
+            },
+        );
+
+        // act
+        void runner.start();
+
+        // assert
+        await consumed.promise;
+        expect(attempts).toEqual(2);
     });
 
     test('only one runner processes when lock is contended', async () => {
