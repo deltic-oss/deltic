@@ -208,6 +208,12 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
         expect(rows[0]?.likedLasagna).toBe(true);
     });
 
+    test('a record can be persisted inside an isolated transaction', async () => {
+        await asyncPool.runInIsolatedTransaction(() => store.persist(exampleIndex, example));
+
+        expect(await store.retrieve(exampleIndex)).toEqual(example);
+    });
+
     test('clearing the store removes every record', async () => {
         await store.persist(exampleIndex, example);
 
@@ -216,6 +222,22 @@ describe('KeyValueStoreWithColumnsUsingPg', () => {
         expect(await store.retrieve(exampleIndex)).toBeUndefined();
     });
 
+    test.each([
+        ['persist', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.persist(exampleIndex, example)],
+        ['retrieve', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.retrieve(exampleIndex)],
+        ['remove', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.remove(exampleIndex)],
+        ['clear', (target: KeyValueStore<ExampleIndex, ExampleObject>) => target.clear()],
+    ])('%s returns the connection it claimed to the pool', async (_name, operation) => {
+        const releaseSpy = vi.spyOn(asyncPool, 'release');
+
+        try {
+            await operation(store);
+
+            expect(releaseSpy).toHaveBeenCalledTimes(1);
+        } finally {
+            releaseSpy.mockRestore();
+        }
+    });
 });
 
 describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {

@@ -315,5 +315,51 @@ describe('KeyValueStoreUsingPg', () => {
             }
         });
 
+        test('clear returns the connection it claimed to the pool', async () => {
+            const releaseSpy = vi.spyOn(ownAsyncPool, 'release');
+
+            try {
+                await pgStore.clear();
+
+                expect(releaseSpy).toHaveBeenCalledTimes(1);
+            } finally {
+                releaseSpy.mockRestore();
+            }
+        });
+
+    });
+});
+
+describe('KeyValueStoreUsingPg within a transaction', () => {
+    const tableName = 'test__kv_store_transactions';
+    let ownPool: Pool;
+    let ownAsyncPool: AsyncPgPool;
+    let pgStore: KeyValueStore<string, ExampleValue>;
+
+    beforeAll(async () => {
+        ownPool = new Pool({...pgTestCredentials, max: 2});
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.query(createKeyValueSchemaQuery(tableName));
+    });
+
+    beforeEach(() => {
+        ownAsyncPool = new AsyncPgPool(ownPool);
+        pgStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {tableName});
+    });
+
+    afterEach(async () => {
+        await ownAsyncPool.flush();
+        await ownPool.query(`TRUNCATE TABLE ${tableName}`);
+    });
+
+    afterAll(async () => {
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.end();
+    });
+
+    test('a value can be persisted inside an isolated transaction', async () => {
+        await expect(
+            ownAsyncPool.runInIsolatedTransaction(() => pgStore.persist('isolated', 'value')),
+        ).resolves.toBeUndefined();
     });
 });

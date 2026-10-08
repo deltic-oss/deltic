@@ -1,4 +1,5 @@
 import type {KeyType, KeyValueStore, ValueType, KeyConversion} from './index.js';
+import type {QueryResult, QueryResultRow} from 'pg';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {ValueReader} from '@deltic/context';
 import type {IdConversion} from '@deltic/uid';
@@ -43,7 +44,6 @@ export class KeyValueStoreUsingPg<
     }
 
     async persist(key: Key, value: Value): Promise<void> {
-        const connection = await this.pool.primary();
         const resolvedKey = this.keyConversion(key);
         const tenantId = this.tenantContext?.mustResolve();
         const values: any[] = [resolvedKey, {value}];
@@ -56,54 +56,45 @@ export class KeyValueStoreUsingPg<
             values.unshift(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
         }
 
-        try {
-            await connection.query(
-                `
-                INSERT INTO ${this.tableName} (${uniqueColumns.join(', ')}, "value")
-                VALUES (${references.join(', ')}) ON CONFLICT (tenant_id, "key") DO
-                UPDATE set "value" = EXCLUDED."value"
-            `,
-                values,
-            );
-        } finally {
-            await this.pool.release(connection);
-        }
+        await this.query(
+            `
+            INSERT INTO ${this.tableName} (${uniqueColumns.join(', ')}, "value")
+            VALUES (${references.join(', ')}) ON CONFLICT (tenant_id, "key") DO
+            UPDATE set "value" = EXCLUDED."value"
+        `,
+            values,
+        );
     }
 
     async retrieve(key: Key): Promise<Value | undefined> {
-        const conn = await this.pool.primary();
-        const resolvedKey = this.keyConversion(key);
+        const result = await this.query<StoredRecord<Value>>(
+            `
+            SELECT "value"
+            from ${this.tableName}
+            WHERE "key" = $1
+            LIMIT 1`,
+            [this.keyConversion(key)],
+        );
 
-        try {
-            const result = await conn.query<StoredRecord<Value>>(
-                `
-                SELECT "value"
-                from ${this.tableName}
-                WHERE "key" = $1
-                LIMIT 1`,
-                [resolvedKey],
-            );
-
-            return result.rows[0]?.value?.value;
-        } finally {
-            await this.pool.release(conn);
-        }
+        return result.rows[0]?.value?.value;
     }
 
     async remove(key: Key): Promise<void> {
-        const conn = await this.pool.primary();
-        const resolvedKey = this.keyConversion(key);
-
-        try {
-            await conn.query(`DELETE FROM ${this.tableName} WHERE "key" = $1`, [resolvedKey]);
-        } finally {
-            await this.pool.release(conn);
-        }
+        await this.query(`DELETE FROM ${this.tableName} WHERE "key" = $1`, [this.keyConversion(key)]);
     }
 
     async clear(): Promise<void> {
-        const conn = await this.pool.primary();
-        await conn.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+        await this.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+    }
+
+    private async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []): Promise<QueryResult<Row>> {
+        const connection = await this.pool.primary();
+
+        try {
+            return await connection.query<Row>(sql, values);
+        } finally {
+            await this.pool.release(connection);
+        }
     }
 }
 
