@@ -1,5 +1,5 @@
 ---
-"@deltic/messaging": patch
+"@deltic/messaging": major
 ---
 
 Run the members of a consumer or dispatcher chain one after the other, and settle only when they are done.
