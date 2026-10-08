@@ -85,6 +85,11 @@ export class MessageRepositoryUsingMemory<Stream extends StreamDefinition> imple
 
     async *paginateIds(options: IdPaginationOptions<Stream>): AsyncGenerator<AggregateIdWithStreamOffset<Stream>> {
         const {limit, afterId, whichMessage = 'last'} = options;
+
+        if (limit <= 0) {
+            return;
+        }
+
         let left = limit;
         let shouldYield = afterId === undefined;
         const collected = new Set<Stream['aggregateRootId']>();
