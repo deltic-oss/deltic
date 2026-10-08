@@ -44,6 +44,7 @@ export class MessageRepositoryUsingPg<Stream extends StreamDefinition> implement
         readonly options: MessageRepositoryUsingPgOptions<Stream> = {},
     ) {
         this.idConversion = options.idConversion;
+        this.tenantIdConversion = options.tenantIdConversion;
         this.tenantContext = options.tenantContext;
         this.notificationConfiguration = options.notificationConfiguration ?? {style: 'none'};
     }
@@ -195,7 +196,7 @@ export class MessageRepositoryUsingPg<Stream extends StreamDefinition> implement
         let whereClause = '';
 
         if (afterId !== undefined) {
-            values.unshift(afterId);
+            values.unshift(this.idConversion?.toDatabase(afterId) ?? afterId);
             whereClause = 'WHERE aggregate_root_id > $1';
         }
 
