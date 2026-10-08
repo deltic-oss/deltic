@@ -1,5 +1,5 @@
 ---
-"@deltic/context": patch
+"@deltic/context": major
 ---
 
 Refuse to attach context values when there is no scope to attach them to.
