@@ -318,6 +318,24 @@ describe('KeyValueStoreWithColumnsUsingPg column declarations', () => {
         expect(rows.map(row => row.user_id)).toEqual(['user-1']);
     });
 
+    test('retrieves a record whose identity column is declared without a value conversion', async () => {
+        const store = makeRenamedColumnStore();
+        const user: User = {userId: 'user-1', nickname: 'Alice'};
+        await store.persist({userId: 'user-1'}, user);
+
+        expect(await store.retrieve({userId: 'user-1'})).toEqual(user);
+    });
+
+    test('removes a record whose identity column is declared without a value conversion', async () => {
+        const store = makeRenamedColumnStore();
+        await store.persist({userId: 'user-1'}, {userId: 'user-1', nickname: 'Alice'});
+
+        await store.remove({userId: 'user-1'});
+
+        const {rows} = await ownPool.query(`SELECT user_id FROM ${snakeCaseTable}`);
+        expect(rows).toEqual([]);
+    });
+
     test('supports an identity column whose name needs quoting', async () => {
         const store = makeCamelCaseColumnStore();
         const user: User = {userId: 'user-1', nickname: 'Alice'};
