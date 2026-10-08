@@ -173,7 +173,8 @@ describe.each([
     });
 
     /**
-     * Documents the absence of a monotonicity guard.
+     * The last offset stored wins, also when it is lower: moving a tracker back is how a consumer
+     * replays or rebuilds.
      */
     test('it moves a tracker backwards when a lower offset is stored', async () => {
         // given
