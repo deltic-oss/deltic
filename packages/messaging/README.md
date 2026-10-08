@@ -152,6 +152,28 @@ message; when the failure leads to a redelivery they receive it again, so they n
 const consumer = new MessageConsumerChain(updateProjection, sendWebhook);
 ```
 
+### Scoping Consumption to a Tenant
+
+`TenantScopingMessageConsumer` runs every message in a context scope of its own, with the tenant from
+its `tenant_id` header. Repositories read the tenant from that same context:
+
+```typescript
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {Context, ValueReadWriterUsingContext} from '@deltic/context';
+import {TenantScopingMessageConsumer} from '@deltic/messaging/tenant-scoping-message-consumer';
+
+const tenantContext = new Context<{tenant_id: string}>(new AsyncLocalStorage());
+const consumer = new TenantScopingMessageConsumer(tenantContext, projection);
+
+// repositories read the tenant through the same context:
+const tenantId = new ValueReadWriterUsingContext(tenantContext, 'tenant_id');
+const messages = new MessageRepositoryUsingPg<OrderStream>(asyncPool, 'order_events', {tenantContext: tenantId});
+```
+
+Back the context with `AsyncLocalStorage` when messages are consumed at the same time, such as by a
+relay with concurrency: it gives every scope its own tenant. `RunMessageConsumerInContext` does the
+same for any other context values resolved from a message.
+
 ### Outbox Pattern
 
 Reliable message delivery through the outbox pattern:
@@ -244,7 +266,7 @@ import {UpcasterUpcastingMessageRepository} from '@deltic/messaging/upcasting';
 | `@deltic/messaging/context-message-decorator` | Adds context values to headers |
 | `@deltic/messaging/decorator-for-event-ids` | Adds unique IDs to events |
 | `@deltic/messaging/tenant-id-decorator` | Adds tenant ID to headers |
-| `@deltic/messaging/tenant-scoping-message-consumer` | Scopes consumption to tenant context |
+| `@deltic/messaging/tenant-scoping-message-consumer` | Runs each message in a scope of its tenant |
 | `@deltic/messaging/run-message-consumer-in-context` | Runs consumer within async context |
 | `@deltic/messaging/message-delivery-counter` | Tracks delivery counts |
 | `@deltic/messaging/outbox` | Outbox interface |
