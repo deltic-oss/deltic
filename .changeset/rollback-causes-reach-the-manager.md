@@ -1,8 +1,9 @@
 ---
 "@deltic/event-sourcing": patch
+"@deltic/async-pg-pool": patch
 ---
 
-Tell the transaction manager why a rollback happened.
+Report why a rollback happened, without punishing the connection for it.
 
 **Fixed in `@deltic/event-sourcing`:**
 
@@ -12,6 +13,12 @@ Tell the transaction manager why a rollback happened.
   every rollback in the system, and it was never told why any of them happened; a manager that
   counts rollbacks by cause, tags a trace span or logs the failing operation now receives the
   cause the interface always advertised.
-- With `TransactionManagerUsingPg`, a failed persist now reaches the pool as the rollback's
-  cause, and the pool gives up the connection for it, as it already did for a failing
-  `AsyncPgPool.runInTransaction` and as pg's own pool does after a failed query.
+
+**Changed in `@deltic/async-pg-pool`, as the prerequisite:**
+
+- A transaction the server finalised — committed, rolled back, or discarded on commit — releases
+  its connection as *healthy*, regardless of the rollback cause. Previously a cause handed to
+  `rollback(client, error)` destroyed a connection the successful ROLLBACK had just shown to be
+  clean. A connection that is actually broken fails the ROLLBACK itself and is still destroyed.
+  The practical effect is less connection churn: a failed unit of work no longer costs a
+  reconnect.
