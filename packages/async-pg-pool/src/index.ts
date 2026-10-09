@@ -598,14 +598,17 @@ export class AsyncPgPool {
         return this.finalizeTransaction('COMMIT', client);
     }
 
-    rollback(client: Connection, error?: unknown): Promise<void> {
-        return this.finalizeTransaction('ROLLBACK', client, error);
+    /**
+     * The cause is for the layers above, such as a manager that logs rollbacks by cause. Whether the
+     * connection survives is decided by whether the ROLLBACK succeeds.
+     */
+    rollback(client: Connection, _error?: unknown): Promise<void> {
+        return this.finalizeTransaction('ROLLBACK', client);
     }
 
     private async finalizeTransaction(
         command: 'ROLLBACK' | 'COMMIT',
         client: Connection,
-        error?: unknown,
     ): Promise<void> {
         const context = this.resolveContext();
 
@@ -618,7 +621,11 @@ export class AsyncPgPool {
 
         try {
             await client.query(command);
-            await this.release(client, error);
+
+            // A finalised transaction leaves a clean session, whatever the unit of work threw. An
+            // error that concerns the connection makes the command itself fail, which destroys the
+            // connection below.
+            await this.release(client);
         } catch (e) {
             // The release above may already have handed the connection back before failing; only
             // release what is still ours, so the caller keeps the error that actually matters

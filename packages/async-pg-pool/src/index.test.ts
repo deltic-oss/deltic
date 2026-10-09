@@ -676,35 +676,57 @@ describe('AsyncPgPool', () => {
             }
         }, 20000);
 
-        test('a connection whose transaction rolled back for a failure is destroyed', async () => {
+        test('a connection whose transaction rolled back cleanly returns to the pool', async () => {
             const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+            const identifier = randomUUID();
 
             try {
                 await inScope({}, async scoped => {
                     await expect(scoped.runInTransaction(async () => {
                         const connection = await scoped.primary();
-                        await connection.query('SELECT 1');
+                        await connection.query(insertLedgerEntry, [identifier, 'never committed']);
 
                         throw new Error('the unit of work failed');
                     })).rejects.toThrow('the unit of work failed');
 
-                    expect(dedicated.totalCount).toEqual(0);
+                    // The ROLLBACK succeeded, so the session is clean and stays pooled.
+                    expect(dedicated.totalCount).toEqual(1);
+                    expect(dedicated.idleCount).toEqual(1);
+
+                    const connection = await scoped.claim();
+                    const result = await connection.query<{count: string}>(
+                        `SELECT count(*) as count FROM ${ledgerTable} WHERE identifier = $1`,
+                        [identifier],
+                    );
+                    await scoped.release(connection);
+
+                    expect(result.rows[0].count).toEqual('0');
                 }, dedicated);
             } finally {
                 await dedicated.end();
             }
         }, 20000);
 
-        test('a connection whose transaction rolled back without a failure returns to the pool', async () => {
+        test('a connection whose ROLLBACK fails is destroyed', async () => {
             const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+            dedicated.on('acquire', client => {
+                const query = client.query.bind(client) as (...args: unknown[]) => unknown;
+                Object.assign(client, {
+                    query: (...args: unknown[]) => args[0] === 'ROLLBACK'
+                        ? Promise.reject(new Error('the rollback failed'))
+                        : query(...args),
+                });
+            });
 
             try {
                 await inScope({}, async scoped => {
-                    const transaction = await scoped.begin();
-                    await scoped.rollback(transaction);
+                    await expect(scoped.runInTransaction(async () => {
+                        await (await scoped.primary()).query('SELECT 1');
 
-                    expect(dedicated.totalCount).toEqual(1);
-                    expect(dedicated.idleCount).toEqual(1);
+                        throw new Error('the unit of work failed');
+                    })).rejects.toThrow();
+
+                    expect(dedicated.totalCount).toEqual(0);
                 }, dedicated);
             } finally {
                 await dedicated.end();
