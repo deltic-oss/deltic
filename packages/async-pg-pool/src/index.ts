@@ -598,19 +598,14 @@ export class AsyncPgPool {
         return this.finalizeTransaction('COMMIT', client);
     }
 
-    /**
-     * The cause is a diagnostic channel for the layers above — `TransactionManagerUsingPg`
-     * forwards it, and a manager that counts or logs rollbacks by cause observes it there. The
-     * pool itself does not condition anything on it: whether the connection survives is decided by
-     * whether the ROLLBACK succeeds, not by why it was requested.
-     */
-    rollback(client: Connection, _error?: unknown): Promise<void> {
-        return this.finalizeTransaction('ROLLBACK', client);
+    rollback(client: Connection, error?: unknown): Promise<void> {
+        return this.finalizeTransaction('ROLLBACK', client, error);
     }
 
     private async finalizeTransaction(
         command: 'ROLLBACK' | 'COMMIT',
         client: Connection,
+        error?: unknown,
     ): Promise<void> {
         const context = this.resolveContext();
 
@@ -623,14 +618,7 @@ export class AsyncPgPool {
 
         try {
             await client.query(command);
-
-            // A transaction the server finalised — committed or rolled back — leaves a
-            // clean session, so the connection goes back healthy either way. The rollback's cause
-            // is a diagnostic for the transaction-management layer, not a verdict on the
-            // connection: releasing on it would destroy a provably working connection and skip the
-            // release hook for exactly the flows that failed. A connection that is actually broken
-            // fails the command itself and is condemned below.
-            await this.release(client);
+            await this.release(client, error);
         } catch (e) {
             // The release above may already have handed the connection back before failing; only
             // release what is still ours, so the caller keeps the error that actually matters
