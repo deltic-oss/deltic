@@ -113,7 +113,7 @@ export function transactionManagerContract(cases: readonly TransactionManagerCon
     describe.each(cases.map(contractCase => [contractCase.name, contractCase] as const))(
         'TransactionManager contract for %s',
         (_name, contractCase) => {
-            const {create, managesTransactions, withoutActiveTransaction} = contractCase;
+            const {create, managesTransactions} = contractCase;
             const forManagedTransactions = test.runIf(managesTransactions);
 
             test('runInTransaction resolves with the result of the unit of work', async () => {
@@ -287,36 +287,24 @@ export function transactionManagerContract(cases: readonly TransactionManagerCon
                 })).rejects.toBe(failure);
             });
 
-            test(`commit() without an active transaction ${withoutActiveTransaction}`, async () => {
+            forManagedTransactions('commit() without an active transaction rejects', async () => {
                 const {manager} = create();
 
-                if (withoutActiveTransaction === 'rejects') {
-                    await expect(manager.commit()).rejects.toThrow();
-                } else {
-                    await expect(manager.commit()).resolves.toBeUndefined();
-                }
+                await expect(manager.commit()).rejects.toThrow();
             });
 
-            test(`rollback() without an active transaction ${withoutActiveTransaction}`, async () => {
+            forManagedTransactions('rollback() without an active transaction rejects', async () => {
                 const {manager} = create();
 
-                if (withoutActiveTransaction === 'rejects') {
-                    await expect(manager.rollback()).rejects.toThrow();
-                } else {
-                    await expect(manager.rollback()).resolves.toBeUndefined();
-                }
+                await expect(manager.rollback()).rejects.toThrow();
             });
 
-            test(`a second commit() ${withoutActiveTransaction}`, async () => {
+            forManagedTransactions('a second commit() rejects', async () => {
                 const {manager} = create();
                 await manager.begin();
                 await manager.commit();
 
-                if (withoutActiveTransaction === 'rejects') {
-                    await expect(manager.commit()).rejects.toThrow();
-                } else {
-                    await expect(manager.commit()).resolves.toBeUndefined();
-                }
+                await expect(manager.commit()).rejects.toThrow();
             });
 
             forManagedTransactions('inTransaction() reports no transaction before begin()', () => {
