@@ -182,7 +182,6 @@ transactionManagerContract([
         name: 'NoopTransactionManager',
         create: () => recordLifecycleOf(new NoopTransactionManager()),
         managesTransactions: false,
-        withoutActiveTransaction: 'ignores',
     },
     {
         name: 'TransactionManagerUsingMemory',
@@ -195,7 +194,6 @@ transactionManagerContract([
             };
         },
         managesTransactions: true,
-        withoutActiveTransaction: 'rejects',
     },
 ]);
 

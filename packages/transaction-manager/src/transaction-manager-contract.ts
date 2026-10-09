@@ -35,16 +35,12 @@ export interface TransactionManagerContractCase {
     create(): TransactionManagerUnderTest;
     /**
      * Whether the implementation keeps real transaction state: begin, commit and
-     * rollback have an effect and `inTransaction()` reflects them. A no-op
+     * rollback have an effect and `inTransaction()` reflects them, and `commit()`
+     * and `rollback()` reject when no transaction is active. A no-op
      * implementation sets this to `false`, which makes the lifecycle expectations
      * inapplicable — they are skipped rather than weakened.
      */
     managesTransactions: boolean;
-    /**
-     * What `commit()` and `rollback()` do when no transaction is active. Managers
-     * backed by a resource reject, a no-op ignores the call.
-     */
-    withoutActiveTransaction: 'rejects' | 'ignores';
 }
 
 /**
