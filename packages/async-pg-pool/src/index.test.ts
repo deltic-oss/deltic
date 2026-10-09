@@ -7,6 +7,7 @@ import {
     type AsyncPgPoolOptions,
     type Connection,
     TransactionManagerUsingPg,
+    UnableToCommitTransaction,
 } from './index.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {randomUUID} from 'node:crypto';
@@ -1217,6 +1218,127 @@ describe('AsyncPgPool', () => {
      * may abort, where there is no reliable moment after the handler to flush. It has to work from a
      * place that can neither wait nor handle a rejection.
      */
+    describe('connections whose session the server ends', () => {
+        /**
+         * Has the server end the session of a connection, and waits until the connection noticed.
+         * Only `end` is listened to here: an `error` without a listener takes the process down,
+         * which is what the pool has to prevent.
+         */
+        const endSessionOf = async (connection: Connection): Promise<void> => {
+            const ended = new Promise<void>(resolve => connection.once('end', () => resolve()));
+            const {rows: [backend]} = await connection.query<{pid: number}>('SELECT pg_backend_pid() AS pid');
+            await pool.query('SELECT pg_terminate_backend($1)', [backend!.pid]);
+
+            expect(await outcomeWithin(ended, 2000)).not.toBe(stillPending);
+        };
+
+        test('refuses to commit a transaction whose session ended', databaseTest, async () => {
+            const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({}, async scoped => {
+                    const transaction = await scoped.begin();
+                    await endSessionOf(transaction);
+
+                    await expect(scoped.commit(transaction)).rejects.toThrow(UnableToCommitTransaction);
+                    expect(dedicated.totalCount).toEqual(0);
+                }, dedicated);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('accepts rolling back a transaction whose session ended, and lets the next one begin', databaseTest, async () => {
+            const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({}, async scoped => {
+                    const transaction = await scoped.begin();
+                    await endSessionOf(transaction);
+
+                    await expect(scoped.rollback(transaction)).resolves.toBeUndefined();
+
+                    const next = outcomeWithin(scoped.runInTransaction(async () => 'next'), 2000);
+
+                    expect(await next).toEqual('next');
+                }, dedicated);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('keeps the flow inside a transaction whose session ended until its owner finalises it', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({}, async scoped => {
+                    const transaction = await scoped.begin();
+                    await endSessionOf(transaction);
+
+                    expect(scoped.inTransaction()).toEqual(true);
+                    await expect((await scoped.primary()).query('SELECT 1')).rejects.toThrow();
+
+                    await scoped.rollback(transaction);
+                }, dedicated);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('hands back a claimed connection whose session ended', databaseTest, async () => {
+            const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({}, async scoped => {
+                    const connection = await scoped.claim();
+                    await endSessionOf(connection);
+
+                    expect(dedicated.totalCount).toEqual(0);
+                    await expect(scoped.release(connection)).resolves.toBeUndefined();
+                }, dedicated);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('replaces a kept primary connection whose session ended', databaseTest, async () => {
+            const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+            // Opened outside the scope, so the connection's events run outside of it too, as they do
+            // for any connection another flow opened.
+            (await dedicated.connect()).release();
+
+            try {
+                await inScope({}, async scoped => {
+                    await endSessionOf(await scoped.primary());
+
+                    const result = await (await scoped.primary()).query<{n: number}>('SELECT 1 AS n');
+
+                    expect(result.rows[0]!.n).toEqual(1);
+                }, dedicated);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('abandoning a scope reports no failure for a transaction whose session ended', databaseTest, async () => {
+            const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({}, async scoped => {
+                    await endSessionOf(await scoped.begin());
+
+                    expect(await scoped.abandon({rollbackOpenTransaction: true})).toEqual({
+                        openTransaction: 'rolled-back',
+                        releasedConnections: 0,
+                        failures: [],
+                    });
+                }, dedicated);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+    });
+
     describe('abandoning a scope that cannot end itself', () => {
         test('leaves an open transaction for its owner and preserves the work by default', databaseTest, async () => {
             const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});

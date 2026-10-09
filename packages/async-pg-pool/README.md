@@ -125,6 +125,19 @@ failed is a no-op, because the transaction already ended without committing. A r
 *successful* commit, or a second rollback, still throws — both mean the caller wants something that
 can no longer be true.
 
+#### When the server ends a session
+
+A session can end while its connection is checked out: a failover, `pg_terminate_backend`, or a
+server timeout such as `idle_in_transaction_session_timeout`. The pool listens for that on every
+connection it hands out. The driver's pool does not while a connection is checked out, and an
+unheard `error` event takes the process down.
+
+The connection goes back to the driver, which discards it, and a kept primary or idle connection is
+replaced on its next use. A transaction on it was rolled back by the server along with the session.
+It stays the flow's transaction until its owner finalises it, so the rest of the flow fails on it
+instead of writing outside of it, where each write would commit on its own. Its `commit()` rejects
+with `UnableToCommitTransaction`, and its `rollback()` succeeds.
+
 #### Custom Isolation Levels
 
 ```typescript

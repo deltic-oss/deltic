@@ -26,6 +26,16 @@ interface ConnectionSupervision {
     handedBack: boolean;
     handBack: PoolClient['release'];
     /**
+     * The context that claimed the connection. A connection's events run on its socket's async chain
+     * rather than in the claiming flow, so the bookkeeping for a connection goes through this.
+     */
+    owner: AsyncPoolContext | undefined;
+    /**
+     * Why the session ended, once the server or the network ended it.
+     */
+    lost?: unknown;
+    stopWatching: () => void;
+    /**
      * How the most recent transaction on this connection ended. What it exists for: the manual
      * `try { commit } catch (e) { rollback(trx, e) }` pattern. When the commit itself failed, the
      * transaction is already finalised by the time the compensating rollback arrives — the rollback
@@ -444,13 +454,16 @@ export class AsyncPgPool {
         if (transaction !== undefined) {
             context.sharedTransaction = undefined;
 
-            try {
-                // Rolling back beats letting the driver do it on release: it ends the transaction
-                // server-side now, rather than leaving its locks held until the connection is reaped.
-                await transaction.query('ROLLBACK');
-            } catch (e) {
-                transactionError = e;
-                failures.push(e);
+            // A lost transaction was rolled back by the server when its session ended.
+            if (supervisionOf(transaction).lost === undefined) {
+                try {
+                    // Rolling back beats letting the driver do it on release: it ends the transaction
+                    // server-side now, rather than leaving its locks held until the connection is reaped.
+                    await transaction.query('ROLLBACK');
+                } catch (e) {
+                    transactionError = e;
+                    failures.push(e);
+                }
             }
 
             try {
@@ -542,6 +555,8 @@ export class AsyncPgPool {
             releasing: false,
             handedBack: false,
             handBack: (client as unknown as PoolClient).release.bind(client),
+            owner: this.currentContext(),
+            stopWatching: () => {},
         };
 
         const connection: Connection = Object.defineProperties(client, {
@@ -572,9 +587,48 @@ export class AsyncPgPool {
             },
         });
 
-        this.currentContext()?.claimed.add(connection);
+        // The driver's pool stops listening to a connection while it is checked out, so without a
+        // listener of its own an `error` from a session the server ended takes the process down.
+        const onError = (error: unknown) => this.loseConnection(connection, error);
+        const onEnd = () => this.loseConnection(connection, UnableToUseConnection.becauseItsSessionEnded());
+        client.on('error', onError);
+        client.on('end', onEnd);
+        state.stopWatching = () => {
+            client.removeListener('error', onError);
+            client.removeListener('end', onEnd);
+        };
+
+        state.owner?.claimed.add(connection);
 
         return connection;
+    }
+
+    /**
+     * The server or the network ended the connection's session.
+     */
+    private loseConnection(connection: Connection, error: unknown): void {
+        const state = supervisionOf(connection);
+
+        if (state.lost !== undefined || state.handedBack) {
+            return;
+        }
+
+        state.lost = error;
+
+        // The session took its transaction with it: the server rolled it back. It stays the
+        // context's transaction until its owner finalises it, so the rest of the flow fails on it
+        // instead of carrying on outside of it, where each of its writes would commit on its own.
+        if (state.owner?.sharedTransaction === connection) {
+            state.owner.claimed.delete(connection);
+            state.handedBack = true;
+            state.stopWatching();
+            state.handBack(asError(error));
+
+            return;
+        }
+
+        // An event has nobody to report a failing release hook to.
+        void this.doRelease(connection, error).catch(() => {});
     }
 
     async claimFresh(): Promise<Connection> {
@@ -661,6 +715,22 @@ export class AsyncPgPool {
             }
 
             throw new Error(`Trying to ${command} a transaction that is NOT the known transaction.`);
+        }
+
+        const state = supervisionOf(client);
+
+        // The server rolled the transaction back when its session ended, and the connection has
+        // already gone back to the driver. A ROLLBACK asks for what already happened.
+        if (state.lost !== undefined) {
+            context.sharedTransaction = undefined;
+            state.transactionOutcome = 'rolled-back';
+            await context.transactionAccess.unlock();
+
+            if (command === 'COMMIT') {
+                throw UnableToCommitTransaction.becauseItsSessionEnded(state.lost);
+            }
+
+            return;
         }
 
         // Whatever happens from here, this transaction is over, and until the command proves
@@ -750,6 +820,11 @@ export class AsyncPgPool {
         const state = supervisionOf(connection);
 
         if (state.handedBack) {
+            // A lost connection went back when its session ended, which its holder cannot know.
+            if (state.lost !== undefined) {
+                return;
+            }
+
             // Releasing a connection twice is a caller mistake worth hearing about, so let the
             // driver report it. Going through its single-use function keeps that signal without
             // running the release hook a second time.
@@ -778,14 +853,9 @@ export class AsyncPgPool {
         }
 
         state.handedBack = true;
+        state.stopWatching();
         const reportedError = hookError ?? err;
-        state.handBack(
-            reportedError === undefined
-                ? undefined
-                : reportedError instanceof Error
-                  ? reportedError
-                  : new Error(String(reportedError)),
-        );
+        state.handBack(reportedError === undefined ? undefined : asError(reportedError));
 
         if (hookError !== undefined) {
             throw UnableToReleaseConnection.because(hookError);
@@ -797,8 +867,8 @@ export class AsyncPgPool {
      * it has gone back to the pool.
      */
     private forget(connection: Connection): void {
-        // Not `resolveContext`: forgetting has to keep working while a context is being flushed.
-        const context = this.currentContext();
+        // The context that claimed it, whichever flow hands it back, and whatever state it is in.
+        const context = supervisionOf(connection).owner;
 
         if (context === undefined) {
             return;
@@ -850,12 +920,32 @@ class UnableToReleaseConnection extends StandardError {
 }
 
 export class UnableToCommitTransaction extends StandardError {
+    static becauseItsSessionEnded = (err: unknown) =>
+        new UnableToCommitTransaction(
+            `Unable to commit: the connection's session ended, and the server rolled the transaction back with it: ${errorToMessage(err)}`,
+            'async-pg-pool.transaction_session_ended',
+            {},
+            err,
+        );
+
     static becauseTheServerDiscardedIt = () =>
         new UnableToCommitTransaction(
             'Unable to commit: the transaction had already failed, so the server discarded it instead of committing. '
                 + 'Every statement in it was rolled back. A statement failed earlier and its error was swallowed.',
             'async-pg-pool.transaction_discarded_on_commit',
         );
+}
+
+class UnableToUseConnection extends StandardError {
+    static becauseItsSessionEnded = () =>
+        new UnableToUseConnection(
+            'Unable to use connection: its session ended',
+            'async-pg-pool.connection_session_ended',
+        );
+}
+
+function asError(err: unknown): Error {
+    return err instanceof Error ? err : new Error(String(err));
 }
 
 class UnableToFlush extends StandardError {
