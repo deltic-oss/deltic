@@ -4,13 +4,15 @@ import {pgTestCredentials} from '../../../pg-credentials.js';
 import {OutboxRepositoryUsingPg} from './outbox-repository.js';
 import {NotifyingOutboxDecoratorUsingPg} from './notifying-outbox-decorator.js';
 import {OutboxRelay} from '@deltic/messaging/outbox';
-import {MultiOutboxRelayRunner, type RelayFailure} from './multi-outbox-relay-runner.js';
+import {
+    DuplicateOutboxLockId,
+    MultiOutboxRelayRunner,
+    type ClaimFailure,
+    type RelayFailure,
+} from './multi-outbox-relay-runner.js';
 import {createMessageConsumer, messageFactory, withoutHeaders} from '@deltic/messaging/helpers';
 import {ConsumingMessageDispatcher} from '@deltic/messaging/consuming-message-dispatcher';
-import {StaticMutexUsingMemory} from '@deltic/mutex/static-memory';
-import {MutexUsingPostgres, type LockIdConverter} from '@deltic/mutex/pg';
-import type {StaticMutex, DynamicMutex, LockValue} from '@deltic/mutex';
-import type {AnyMessageFrom} from '@deltic/messaging';
+import type {AnyMessageFrom, MessageConsumer, StreamDefinition} from '@deltic/messaging';
 import {WaitGroup} from '@deltic/wait-group';
 import {setTimeout as wait} from 'node:timers/promises';
 
@@ -36,12 +38,35 @@ const channelName = 'outbox_publish';
 const createMessageA = messageFactory<StreamA>();
 const createMessageB = messageFactory<StreamB>();
 
-function staticMutexFrom<LockID extends LockValue>(mutex: DynamicMutex<LockID>, id: LockID): StaticMutex {
-    return {
-        tryLock: () => mutex.tryLock(id),
-        lock: (timeout?: number) => mutex.lock(id, timeout),
-        unlock: () => mutex.unlock(id),
-    };
+const lockA = 940_001;
+const lockB = 940_002;
+
+function relayInto<Stream extends StreamDefinition>(pool: AsyncPgPool, tableName: string, consumer: MessageConsumer<Stream>): OutboxRelay<Stream> {
+    return new OutboxRelay(new OutboxRepositoryUsingPg<Stream>(pool, tableName), new ConsumingMessageDispatcher([consumer]));
+}
+
+/**
+ * The backend process holding each of the given advisory locks, in the order of the lock ids.
+ */
+async function holdersOf(...lockIds: number[]): Promise<(number | undefined)[]> {
+    const {rows} = await pgPool.query<{objid: number; pid: number}>(
+        `SELECT objid::int AS objid, pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objid = ANY($1::int[])`,
+        [lockIds],
+    );
+
+    return lockIds.map(lockId => rows.find(row => row.objid === lockId)?.pid);
+}
+
+async function eventually(condition: () => Promise<boolean>, timeoutMs: number = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (!(await condition())) {
+        if (Date.now() > deadline) {
+            throw new Error('The condition did not hold in time');
+        }
+
+        await wait(25);
+    }
 }
 
 function createNotifyingOutbox<Stream extends {aggregateRootId: string | number; messages: Record<string, any>}>(
@@ -76,6 +101,11 @@ let runner: MultiOutboxRelayRunner | undefined;
 let runner2: MultiOutboxRelayRunner | undefined;
 let runnerPool: AsyncPgPool | undefined;
 let runnerPool2: AsyncPgPool | undefined;
+/**
+ * The connections of another process: a runner on it cannot reuse a connection the first runner
+ * handed back.
+ */
+let otherProcessPool: Pool | undefined;
 
 beforeAll(async () => {
     pgPool = new Pool(pgTestCredentials);
@@ -92,6 +122,8 @@ afterEach(async () => {
     await runner2?.stop();
     await runnerPool?.flush();
     await runnerPool2?.flush();
+    await otherProcessPool?.end();
+    otherProcessPool = undefined;
 
     runner = undefined;
     runner2 = undefined;
@@ -137,8 +169,7 @@ describe('MultiOutboxRelayRunner', () => {
 
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
-            {[tableA]: relayA, [tableB]: relayB},
+            {[tableA]: {relay: relayA, lockId: lockA}, [tableB]: {relay: relayB, lockId: lockB}},
             {channelName, pollIntervalMs: 60_000},
         );
 
@@ -199,8 +230,7 @@ describe('MultiOutboxRelayRunner', () => {
 
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
-            {[tableA]: relayA, [tableB]: relayB},
+            {[tableA]: {relay: relayA, lockId: lockA}, [tableB]: {relay: relayB, lockId: lockB}},
             {channelName, pollIntervalMs: 60_000},
         );
 
@@ -217,28 +247,23 @@ describe('MultiOutboxRelayRunner', () => {
         ]);
     });
 
-    test('runner can be stopped while waiting for lock acquisition', async () => {
+    test('a runner that holds no outbox can be stopped', async () => {
         // arrange
-        const neverAcquiresMutex: StaticMutex = {
-            tryLock: async () => false,
-            lock: async () => {},
-            unlock: async () => {},
-        };
+        const idle = createMessageConsumer<StreamA>(async () => {});
         runnerPool = new AsyncPgPool(pgPool);
-        runner = new MultiOutboxRelayRunner(
-            runnerPool,
-            neverAcquiresMutex,
-            {},
-            {channelName, lockRetryMs: 50},
-        );
+        runner = new MultiOutboxRelayRunner(runnerPool, {[tableA]: {relay: relayInto(runnerPool, tableA, idle), lockId: lockA}}, {channelName, lockAcquisitionIntervalMs: 50});
+        void runner.start();
+        await eventually(async () => (await holdersOf(lockA))[0] !== undefined);
+        runnerPool2 = new AsyncPgPool(pgPool);
+        runner2 = new MultiOutboxRelayRunner(runnerPool2, {[tableA]: {relay: relayInto(runnerPool2, tableA, idle), lockId: lockA}}, {channelName, lockAcquisitionIntervalMs: 50});
+        const started = runner2.start();
+        await wait(200);
 
         // act
-        const startPromise = runner.start();
-        await wait(200);
-        await runner.stop();
+        await runner2.stop();
 
-        // assert — start() resolves without hanging
-        await startPromise;
+        // assert
+        await expect(started).resolves.toBeUndefined();
     });
 
     test('a failed batch is retried after a backoff while the other outboxes keep relaying', async () => {
@@ -268,10 +293,9 @@ describe('MultiOutboxRelayRunner', () => {
         runnerPool = new AsyncPgPool(pgPool);
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
             {
-                [tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumerA])),
-                [tableB]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamB>(runnerPool, tableB), new ConsumingMessageDispatcher([consumerB])),
+                [tableA]: {relay: relayInto(runnerPool, tableA, consumerA), lockId: lockA},
+                [tableB]: {relay: relayInto(runnerPool, tableB, consumerB), lockId: lockB},
             },
             {channelName, pollIntervalMs: 200, onRelayFailure: failure => failures.push(failure)},
         );
@@ -313,8 +337,7 @@ describe('MultiOutboxRelayRunner', () => {
         runnerPool = new AsyncPgPool(pgPool);
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
-            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {[tableA]: {relay: relayInto(runnerPool, tableA, consumer), lockId: lockA}},
             {channelName, pollIntervalMs: 50, failureBackoffCeilingMs: 150, onRelayFailure: failure => failures.push(failure)},
         );
 
@@ -350,8 +373,7 @@ describe('MultiOutboxRelayRunner', () => {
         runnerPool = new AsyncPgPool(pgPool);
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
-            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {[tableA]: {relay: relayInto(runnerPool, tableA, consumer), lockId: lockA}},
             {channelName, pollIntervalMs: 1000, onRelayFailure: () => failed.resolve()},
         );
         void runner.start();
@@ -376,8 +398,7 @@ describe('MultiOutboxRelayRunner', () => {
         runnerPool = new AsyncPgPool(pgPool);
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
-            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {[tableA]: {relay: relayInto(runnerPool, tableA, consumer), lockId: lockA}},
             {channelName, pollIntervalMs: 50, onRelayFailure: failure => failures.push(failure)},
         );
 
@@ -406,8 +427,7 @@ describe('MultiOutboxRelayRunner', () => {
         runnerPool = new AsyncPgPool(pgPool);
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
-            {[tableA]: new OutboxRelay(new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA), new ConsumingMessageDispatcher([consumer]))},
+            {[tableA]: {relay: relayInto(runnerPool, tableA, consumer), lockId: lockA}},
             {
                 channelName,
                 pollIntervalMs: 50,
@@ -425,73 +445,231 @@ describe('MultiOutboxRelayRunner', () => {
         expect(attempts).toEqual(2);
     });
 
-    test('only one runner processes when lock is contended', async () => {
+    test('an outbox is relayed by the runner holding its lock, and taken over once that runner stops', async () => {
         // arrange
-        const consumedA1: AnyMessageFrom<StreamA>[] = [];
-        const consumedA2: AnyMessageFrom<StreamA>[] = [];
-        const waitGroup = new WaitGroup();
-
-        const consumer1 = createMessageConsumer<StreamA>(async (message) => {
-            consumedA1.push(message);
-            waitGroup.done();
-        });
-        const consumer2 = createMessageConsumer<StreamA>(async (message) => {
-            consumedA2.push(message);
-            waitGroup.done();
-        });
-
+        const consumedByFirst: number[] = [];
+        const consumedBySecond: number[] = [];
+        const first = new WaitGroup();
+        const second = new WaitGroup();
         runnerPool = new AsyncPgPool(pgPool);
-        runnerPool2 = new AsyncPgPool(pgPool);
-        const relay1 = new OutboxRelay(
-            new OutboxRepositoryUsingPg<StreamA>(runnerPool, tableA),
-            new ConsumingMessageDispatcher([consumer1]),
-        );
-        const relay2 = new OutboxRelay(
-            new OutboxRepositoryUsingPg<StreamA>(runnerPool2, tableA),
-            new ConsumingMessageDispatcher([consumer2]),
-        );
-
-        const lockId = 999998;
-        const converter: LockIdConverter<number> = {convert: () => lockId};
-        const pgMutex1 = new MutexUsingPostgres(runnerPool, converter, 'fresh');
-        const pgMutex2 = new MutexUsingPostgres(runnerPool2, converter, 'fresh');
-
-        runner = new MultiOutboxRelayRunner(
-            runnerPool,
-            staticMutexFrom(pgMutex1, lockId),
-            {[tableA]: relay1},
-            {channelName, pollIntervalMs: 100, lockRetryMs: 100},
-        );
-        runner2 = new MultiOutboxRelayRunner(
-            runnerPool2,
-            staticMutexFrom(pgMutex2, lockId),
-            {[tableA]: relay2},
-            {channelName, pollIntervalMs: 100, lockRetryMs: 100},
-        );
-
+        runner = new MultiOutboxRelayRunner(runnerPool, {
+            [tableA]: {
+                relay: relayInto(runnerPool, tableA, createMessageConsumer<StreamA>(async message => {
+                    consumedByFirst.push(message.payload);
+                    first.done();
+                })),
+                lockId: lockA,
+            },
+        }, {channelName, pollIntervalMs: 60_000, lockAcquisitionIntervalMs: 50});
         void runner.start();
+        await eventually(async () => (await holdersOf(lockA))[0] !== undefined);
+        otherProcessPool = new Pool(pgTestCredentials);
+        runnerPool2 = new AsyncPgPool(otherProcessPool);
+        runner2 = new MultiOutboxRelayRunner(runnerPool2, {
+            [tableA]: {
+                relay: relayInto(runnerPool2, tableA, createMessageConsumer<StreamA>(async message => {
+                    consumedBySecond.push(message.payload);
+                    second.done();
+                })),
+                lockId: lockA,
+            },
+        }, {channelName, pollIntervalMs: 60_000, lockAcquisitionIntervalMs: 50});
         void runner2.start();
-        await wait(500);
+        await wait(200);
 
         // act
-        waitGroup.add(2);
-        const testOutbox = createNotifyingOutbox<StreamA>(testPool, tableA);
-        await testOutbox.persist([createMessageA('ping', 1), createMessageA('pong', 2)]);
+        first.add(1);
+        await createNotifyingOutbox<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        await first.wait(5000);
+        await runner.stop();
+        second.add(1);
+        await createNotifyingOutbox<StreamA>(testPool, tableA).persist([createMessageA('ping', 2)]);
+        await second.wait(5000);
 
-        await waitGroup.wait(5000);
+        // assert
+        expect(consumedByFirst).toEqual([1]);
+        expect(consumedBySecond).toEqual([2]);
+    });
 
-        // assert — only one consumer should have received messages
-        const total = consumedA1.length + consumedA2.length;
-        expect(total).toEqual(2);
+    test('the outboxes of a group share one connection, and every group has its own', async () => {
+        // arrange
+        const idleA = createMessageConsumer<StreamA>(async () => {});
+        const idleB = createMessageConsumer<StreamB>(async () => {});
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(runnerPool, {
+            [tableA]: {relay: relayInto(runnerPool, tableA, idleA), lockId: lockA, group: 'shared'},
+            [tableB]: {relay: relayInto(runnerPool, tableB, idleB), lockId: lockB, group: 'shared'},
+        }, {channelName, lockAcquisitionIntervalMs: 50});
+        runnerPool2 = new AsyncPgPool(pgPool);
+        runner2 = new MultiOutboxRelayRunner(runnerPool2, {
+            [tableA]: {relay: relayInto(runnerPool2, tableA, idleA), lockId: lockA, group: 'first'},
+            [tableB]: {relay: relayInto(runnerPool2, tableB, idleB), lockId: lockB, group: 'second'},
+        }, {channelName, lockAcquisitionIntervalMs: 50});
 
-        const winner = consumedA1.length > 0 ? consumedA1 : consumedA2;
-        const loser = consumedA1.length > 0 ? consumedA2 : consumedA1;
+        // act
+        void runner.start();
+        await eventually(async () => !(await holdersOf(lockA, lockB)).includes(undefined));
+        const shared = await holdersOf(lockA, lockB);
+        await runner.stop();
+        void runner2.start();
+        await eventually(async () => !(await holdersOf(lockA, lockB)).includes(undefined));
+        const separate = await holdersOf(lockA, lockB);
 
-        expect(winner.map(withoutHeaders)).toEqual([
-            createMessageA('ping', 1),
-            createMessageA('pong', 2),
-        ]);
-        expect(loser).toHaveLength(0);
+        // assert
+        expect(shared[0]).toEqual(shared[1]);
+        expect(separate[0]).not.toEqual(separate[1]);
+    });
+
+    test('a runner relays only the groups it holds', async () => {
+        // arrange
+        const consumedA: AnyMessageFrom<StreamA>[] = [];
+        const consumedB = Promise.withResolvers<void>();
+        await new OutboxRepositoryUsingPg<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        await new OutboxRepositoryUsingPg<StreamB>(testPool, tableB).persist([createMessageB('foo', 'bar')]);
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(runnerPool, {
+            [tableA]: {relay: relayInto(runnerPool, tableA, createMessageConsumer<StreamA>(async message => {
+                consumedA.push(message);
+            })), lockId: lockA, group: 'first'},
+            [tableB]: {relay: relayInto(runnerPool, tableB, createMessageConsumer<StreamB>(async () => {
+                consumedB.resolve();
+            })), lockId: lockB, group: 'second'},
+        }, {channelName, holdGroups: ['second'], pollIntervalMs: 50, lockAcquisitionIntervalMs: 50});
+
+        // act
+        void runner.start();
+        await consumedB.promise;
+        await wait(200);
+
+        // assert
+        expect(consumedA).toEqual([]);
+        expect(await holdersOf(lockA)).toEqual([undefined]);
+    });
+
+    test('a runner that lost the lock of an outbox stops relaying it', async () => {
+        // arrange
+        const consumed: number[] = [];
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(runnerPool, {
+            [tableA]: {relay: relayInto(runnerPool, tableA, createMessageConsumer<StreamA>(async message => {
+                consumed.push(message.payload);
+            })), lockId: lockA},
+        }, {channelName, pollIntervalMs: 50, lockAcquisitionIntervalMs: 60_000});
+        void runner.start();
+        await eventually(async () => (await holdersOf(lockA))[0] !== undefined);
+        const [lost] = await holdersOf(lockA);
+
+        // act
+        await pgPool.query('SELECT pg_terminate_backend($1)', [lost]);
+        await eventually(async () => (await holdersOf(lockA))[0] === undefined);
+        await wait(100);
+        await new OutboxRepositoryUsingPg<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        await wait(300);
+
+        // assert
+        expect(consumed).toEqual([]);
+    });
+
+    test('an outbox whose connection dropped is claimed again on a new connection', async () => {
+        // arrange
+        const consumed = Promise.withResolvers<void>();
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(runnerPool, {
+            [tableA]: {relay: relayInto(runnerPool, tableA, createMessageConsumer<StreamA>(async () => {
+                consumed.resolve();
+            })), lockId: lockA},
+        }, {channelName, pollIntervalMs: 60_000, lockAcquisitionIntervalMs: 50});
+        void runner.start();
+        await eventually(async () => (await holdersOf(lockA))[0] !== undefined);
+        const [dropped] = await holdersOf(lockA);
+
+        // act
+        await pgPool.query('SELECT pg_terminate_backend($1)', [dropped]);
+        await eventually(async () => ![undefined, dropped].includes((await holdersOf(lockA))[0]));
+        await createNotifyingOutbox<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+
+        // assert
+        await consumed.promise;
+    });
+
+    test('never relays more outboxes at the same time than maxConcurrentRelays allows', async () => {
+        // arrange
+        const started: string[] = [];
+        const gates: Record<string, PromiseWithResolvers<void>> = {[tableA]: Promise.withResolvers(), [tableB]: Promise.withResolvers()};
+        const done = new WaitGroup();
+        done.add(2);
+        const gated = (tableName: string) => async () => {
+            started.push(tableName);
+            await gates[tableName].promise;
+            done.done();
+        };
+        await new OutboxRepositoryUsingPg<StreamA>(testPool, tableA).persist([createMessageA('ping', 1)]);
+        await new OutboxRepositoryUsingPg<StreamB>(testPool, tableB).persist([createMessageB('foo', 'bar')]);
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(runnerPool, {
+            [tableA]: {relay: relayInto(runnerPool, tableA, createMessageConsumer<StreamA>(gated(tableA))), lockId: lockA},
+            [tableB]: {relay: relayInto(runnerPool, tableB, createMessageConsumer<StreamB>(gated(tableB))), lockId: lockB},
+        }, {channelName, maxConcurrentRelays: 1, pollIntervalMs: 60_000, lockAcquisitionIntervalMs: 50});
+
+        // act
+        void runner.start();
+        await eventually(async () => started.length > 0);
+        await wait(300);
+        const startedWhileTheFirstRan = [...started];
+        gates[tableA].resolve();
+        gates[tableB].resolve();
+
+        // assert
+        await done.wait(5000);
+        expect(startedWhileTheFirstRan).toHaveLength(1);
+        expect(started.toSorted()).toEqual([tableA, tableB]);
+    });
+
+    test('a group whose locks cannot be taken is reported without holding up the other groups', async () => {
+        // arrange
+        const failures: ClaimFailure[] = [];
+        const consumedB = Promise.withResolvers<void>();
+        await new OutboxRepositoryUsingPg<StreamB>(testPool, tableB).persist([createMessageB('foo', 'bar')]);
+        runnerPool = new AsyncPgPool(pgPool);
+        runner = new MultiOutboxRelayRunner(runnerPool, {
+            // not a valid advisory lock key, so taking it fails
+            [tableA]: {relay: relayInto(runnerPool, tableA, createMessageConsumer<StreamA>(async () => {})), lockId: 1.5, group: 'broken'},
+            [tableB]: {relay: relayInto(runnerPool, tableB, createMessageConsumer<StreamB>(async () => {
+                consumedB.resolve();
+            })), lockId: lockB, group: 'working'},
+        }, {
+            channelName,
+            lockAcquisitionIntervalMs: 50,
+            onClaimFailure: failure => {
+                failures.push(failure);
+
+                throw new Error('the logger is down');
+            },
+        });
+
+        // act
+        void runner.start();
+
+        // assert
+        await consumedB.promise;
+        expect(failures.length).toBeGreaterThan(0);
+        expect(failures.every(failure => failure.group === 'broken')).toBe(true);
+    });
+
+    test('refuses two outboxes that share a lock id', () => {
+        // arrange
+        const pool = new AsyncPgPool(pgPool);
+        const idleA = createMessageConsumer<StreamA>(async () => {});
+        const idleB = createMessageConsumer<StreamB>(async () => {});
+
+        // act
+        const construct = () => new MultiOutboxRelayRunner(pool, {
+            [tableA]: {relay: relayInto(pool, tableA, idleA), lockId: lockA, group: 'first'},
+            [tableB]: {relay: relayInto(pool, tableB, idleB), lockId: lockA, group: 'second'},
+        });
+
+        // assert
+        expect(construct).toThrow(DuplicateOutboxLockId);
     });
 
     test('notifications for unregistered identifiers are ignored', async () => {
@@ -513,8 +691,7 @@ describe('MultiOutboxRelayRunner', () => {
         // Only register tableA — tableB is NOT registered
         runner = new MultiOutboxRelayRunner(
             runnerPool,
-            new StaticMutexUsingMemory(),
-            {[tableA]: relay},
+            {[tableA]: {relay, lockId: lockA}},
             {channelName, pollIntervalMs: 60_000},
         );
 

@@ -122,11 +122,11 @@ describe('setupMultiOutboxRelay', () => {
 
             const services = setupMultiOutboxRelay(container, {
                 pool: deps.pool,
-                mutex: deps.mutex,
                 relays: {
                     'test_outbox': {
                         outboxRepository: deps.outboxRepository,
                         dispatcher: deps.dispatcher,
+                        lockId: 7101,
                     },
                 },
             });
@@ -140,11 +140,11 @@ describe('setupMultiOutboxRelay', () => {
 
             const services = setupMultiOutboxRelay(container, {
                 pool: deps.pool,
-                mutex: deps.mutex,
                 relays: {
                     'test_outbox': {
                         outboxRepository: deps.outboxRepository,
                         dispatcher: deps.dispatcher,
+                        lockId: 7102,
                     },
                 },
                 prefix: 'multi-relay',
@@ -161,11 +161,11 @@ describe('setupMultiOutboxRelay', () => {
 
             const services = setupMultiOutboxRelay(container, {
                 pool: deps.pool,
-                mutex: deps.mutex,
                 relays: {
                     'test_outbox': {
                         outboxRepository: deps.outboxRepository,
                         dispatcher: deps.dispatcher,
+                        lockId: 7103,
                     },
                 },
                 serviceKeys: {runner: runnerKey},
@@ -194,15 +194,16 @@ describe('setupMultiOutboxRelay', () => {
 
             const services = setupMultiOutboxRelay(container, {
                 pool: forgeServiceKey<AsyncPgPool>('test:pool'),
-                mutex: forgeServiceKey<StaticMutex>('test:mutex'),
                 relays: {
                     'table_a': {
                         outboxRepository: outboxA,
                         dispatcher: dispatcherA,
+                        lockId: 7104,
                     },
                     'table_b': {
                         outboxRepository: outboxB,
                         dispatcher: dispatcherB,
+                        lockId: 7105,
                     },
                 },
             });
@@ -215,7 +216,6 @@ describe('setupMultiOutboxRelay', () => {
 
             const services = setupMultiOutboxRelay(container, {
                 pool: forgeServiceKey<AsyncPgPool>('test:pool'),
-                mutex: forgeServiceKey<StaticMutex>('test:mutex'),
                 relays: {},
             });
 
@@ -230,11 +230,11 @@ describe('setupMultiOutboxRelay', () => {
 
             const services = setupMultiOutboxRelay(container, {
                 pool: deps.pool,
-                mutex: deps.mutex,
                 relays: {
                     'test_outbox': {
                         outboxRepository: deps.outboxRepository,
                         dispatcher: deps.dispatcher,
+                        lockId: 7106,
                     },
                 },
                 channelName: 'custom_channel',
@@ -249,17 +249,17 @@ describe('setupMultiOutboxRelay', () => {
 
             const services = setupMultiOutboxRelay(container, {
                 pool: deps.pool,
-                mutex: deps.mutex,
                 relays: {
                     'test_outbox': {
                         outboxRepository: deps.outboxRepository,
                         dispatcher: deps.dispatcher,
+                        lockId: 7107,
                     },
                 },
                 batchSize: 200,
                 commitSize: 50,
                 pollIntervalMs: 5000,
-                lockRetryMs: 2000,
+                lockAcquisitionIntervalMs: 2000,
             });
 
             expect(services.runner).toContain('outbox-relay:');
