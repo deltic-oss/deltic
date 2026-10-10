@@ -84,6 +84,8 @@ export interface MessageDecoratorFunc<Stream extends StreamDefinition> {
     <M extends AnyMessageFrom<Stream>>(message: M): M;
 }
 
+export type WhichMessageToProbe = 'first' | 'last';
+
 export interface AggregateIdWithStreamOffset<Stream extends StreamDefinition> {
     version: number;
     id: Stream['aggregateRootId'];
@@ -92,8 +94,8 @@ export interface AggregateIdWithStreamOffset<Stream extends StreamDefinition> {
 
 export interface IdPaginationOptions<Stream extends StreamDefinition> {
     limit: number;
-    afterId?: Stream['aggregateRootId'];
-    whichMessage?: 'first' | 'last';
+    afterId?: Stream['aggregateRootId'] | undefined;
+    whichMessage?: WhichMessageToProbe;
 }
 
 export interface MessageRepository<Stream extends StreamDefinition> {
