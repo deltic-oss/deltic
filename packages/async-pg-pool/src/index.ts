@@ -34,6 +34,7 @@ interface ConnectionSupervision {
      * Why the session ended, once the server or the network ended it.
      */
     lost?: unknown;
+    sessionEnded: PromiseWithResolvers<void>;
     stopWatching: () => void;
     /**
      * How the most recent transaction on this connection ended. What it exists for: the manual
@@ -125,15 +126,17 @@ export interface AbandonedScope {
     /**
      * What was found of an open transaction:
      * - `'none'` — there was none;
-     * - `'left-open'` — there was one and it was left for the owner that will finalise it, because
-     *   forcing it would roll back work the owner may still intend to commit (the default);
-     * - `'rolled-back'` — there was one and it was rolled back, because the caller asked to reclaim
-     *   the connection rather than wait for an owner that may never finish.
+     * - `'finished'` — there was one, and the scope ended once its owner committed or rolled it back
+     *   (the default);
+     * - `'lost'` — there was one, and the scope ended when the server ended its session, which
+     *   rolled it back;
+     * - `'rolled-back'` — there was one, and it was rolled back, because the caller asked to reclaim
+     *   the connection rather than wait.
      *
-     * Anything other than `'none'` means a transaction outlived the code that opened it, which is
-     * worth counting: `'left-open'` that never clears is a leak, and `'rolled-back'` discarded work.
+     * Anything other than `'none'` means a transaction was still open when its scope was abandoned,
+     * which is worth counting: `'lost'` and `'rolled-back'` discarded its work.
      */
-    openTransaction: 'none' | 'left-open' | 'rolled-back';
+    openTransaction: 'none' | 'finished' | 'lost' | 'rolled-back';
     releasedConnections: number;
     failures: unknown[];
 }
@@ -143,10 +146,11 @@ export interface AbandonedScope {
  */
 export interface AbandonOptions {
     /**
-     * Roll the transaction back and reclaim its connection, rather than leaving it for its owner.
-     * Off by default: a client disconnecting mid-request does not stop the handler, so the work it
-     * is about to commit must not be thrown away. Turn it on where reclaiming the connection matters
-     * more than the in-flight work — typically a hard deadline, after a grace period has passed.
+     * Roll the transaction back and reclaim its connection now, rather than waiting for its owner to
+     * finalise it. Off by default: a client disconnecting mid-request does not stop the handler, so
+     * the work it is about to commit must not be thrown away. Turn it on where reclaiming the
+     * connection matters more than the in-flight work — typically a hard deadline, after a grace
+     * period has passed.
      */
     rollbackOpenTransaction?: boolean;
 }
@@ -387,21 +391,26 @@ export class AsyncPgPool {
     }
 
     /**
-     * End the scope whatever state it is in, and report what that took.
+     * End the scope once its open transaction has ended, and report what that took.
      *
-     * Waits for nothing and rejects for nothing, so it is safe to call from the places where a scope
-     * turns out to be over but no result can be handled: a socket close handler, a deadline timer, a
-     * signal handler. Anything that went wrong is in the returned `failures` rather than thrown,
-     * because a rejection in such a handler is an unhandled rejection.
+     * Rejects for nothing, so it is safe to call from the places where a scope turns out to be over
+     * but no result can be handled: a socket close handler, a deadline timer, a signal handler.
+     * Anything that went wrong is in the returned `failures` rather than thrown, because a rejection
+     * in such a handler is an unhandled rejection.
      *
      * It ends the scope of the flow it is called from. An event listener does not necessarily run in
      * the flow that registered it — a response's `close` on a client disconnect runs with no scope
      * at all — so bind such a listener to its scope (`AsyncResource.bind`) or this finds nothing.
      *
-     * By default an open transaction is *left alone*: a client disconnecting mid-request does not
-     * stop the handler, so the transaction may still be committed by work that is still running, and
-     * reclaiming it would discard that work. Pass `rollbackOpenTransaction` to force it back where
-     * reclaiming the connection matters more — typically a hard deadline after a grace period.
+     * An open transaction is waited for: a client disconnecting mid-request does not stop the
+     * handler, which may still commit. The scope ends once the transaction's owner commits or rolls
+     * it back, or once the server ends the transaction's session. The server's timeouts are what
+     * bound the wait: `idle_in_transaction_session_timeout`, and from PostgreSQL 17
+     * `transaction_timeout`. Whatever the flow does after that fails as work on an ended scope does.
+     * Awaiting this inside the open transaction's own flow waits on itself.
+     *
+     * Pass `rollbackOpenTransaction` to end the scope now instead, rolling the transaction back —
+     * typically a hard deadline after a grace period.
      *
      * Calling it more than once is harmless, and it can be called after a flush.
      */
@@ -414,14 +423,20 @@ export class AsyncPgPool {
             return {openTransaction: 'none', releasedConnections: 0, failures: []};
         }
 
+        if (options.rollbackOpenTransaction === true) {
+            return this.abandonNow(context);
+        }
+
+        return this.abandonOnceTransactionEnded(context);
+    }
+
+    private async abandonNow(context: AsyncPoolContext): Promise<AbandonedScope> {
         // Taken if it happens to be free, never waited for. It is only held while a connection is
         // being claimed or a transaction started, and waiting is the one thing this must not do.
         const exclusive = await context.exclusiveAccess.tryLock();
 
         try {
-            return await this.tearDown(context, {
-                rollbackOpenTransaction: options.rollbackOpenTransaction ?? false,
-            });
+            return await this.tearDown(context, {rollbackOpenTransaction: true});
         } catch (e) {
             return {openTransaction: 'none', releasedConnections: 0, failures: [e]};
         } finally {
@@ -431,6 +446,50 @@ export class AsyncPgPool {
         }
     }
 
+    private async abandonOnceTransactionEnded(context: AsyncPoolContext): Promise<AbandonedScope> {
+        const transaction = context.sharedTransaction;
+        // Queued behind the open transaction, so the scope ends before any transaction that would
+        // begin after it.
+        const access = context.transactionAccess.lock();
+        const ended = await Promise.race([
+            access.then(() => 'finished' as const),
+            ...(transaction === undefined
+                ? []
+                : [supervisionOf(transaction).sessionEnded.promise.then(() => 'lost' as const)]),
+        ]);
+
+        if (ended === 'lost') {
+            // The lock stays with the transaction's owner. Once the owner hands it over, this gives
+            // it straight back, so a wait that already ended does not keep it.
+            void access.then(() => context.transactionAccess.unlock()).catch(() => undefined);
+        }
+
+        let outcome: AbandonedScope = {openTransaction: 'none', releasedConnections: 0, failures: []};
+
+        try {
+            await context.exclusiveAccess.lock();
+
+            try {
+                outcome = await this.tearDown(context, {rollbackOpenTransaction: false});
+                outcome.openTransaction = transaction === undefined ? 'none' : ended;
+            } finally {
+                await context.exclusiveAccess.unlock();
+            }
+        } catch (e) {
+            outcome.failures.push(e);
+        }
+
+        if (ended === 'finished') {
+            try {
+                await context.transactionAccess.unlock();
+            } catch (e) {
+                outcome.failures.push(e);
+            }
+        }
+
+        return outcome;
+    }
+
     /**
      * Return everything the context holds, reporting rather than throwing.
      */
@@ -438,16 +497,10 @@ export class AsyncPgPool {
         context: AsyncPoolContext,
         {rollbackOpenTransaction}: {rollbackOpenTransaction: boolean},
     ): Promise<AbandonedScope> {
-        const transaction = context.sharedTransaction;
-
-        // An open transaction means the scope may still be doing work — the classic case being a
-        // request whose client has gone but whose handler runs on to commit. Unless the caller
-        // insists, leave the transaction and everything else to the owner that will finalise it, and
-        // report that it was left. Touching it would discard work the owner still intends to keep.
-        if (transaction !== undefined && !rollbackOpenTransaction) {
-            return {openTransaction: 'left-open', releasedConnections: 0, failures: []};
-        }
-
+        // Left to its owner unless the caller asked to end it. Abandoning waits for the transaction
+        // first, so what it can still find here is one whose session ended, which its owner
+        // finalises.
+        const transaction = rollbackOpenTransaction ? context.sharedTransaction : undefined;
         const failures: unknown[] = [];
         let transactionError: unknown = undefined;
 
@@ -556,6 +609,7 @@ export class AsyncPgPool {
             handedBack: false,
             handBack: (client as unknown as PoolClient).release.bind(client),
             owner: this.currentContext(),
+            sessionEnded: Promise.withResolvers<void>(),
             stopWatching: () => {},
         };
 
@@ -614,6 +668,7 @@ export class AsyncPgPool {
         }
 
         state.lost = error;
+        state.sessionEnded.resolve();
 
         // The session took its transaction with it: the server rolled it back. It stays the
         // context's transaction until its owner finalises it, so the rest of the flow fails on it

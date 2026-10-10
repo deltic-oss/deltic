@@ -249,7 +249,7 @@ new AsyncPgPool(pool: Pool, options?: AsyncPgPoolOptions)
 | `runInIsolation(fn)` | Runs a function in an isolated connection context |
 | `runInIsolatedTransaction(fn)` | Combines isolation and transaction management |
 | `flush()` | Ends the context, expecting nothing outstanding. Rejects if a transaction was left open |
-| `abandon()` | Ends the context whatever state it is in. Never waits, never rejects |
+| `abandon()` | Ends the context once its open transaction has ended. Never rejects |
 | `flushSharedContext()` | Deprecated alias for `flush()` |
 
 ### Ending a context
@@ -265,29 +265,38 @@ you in a `finally`.
 `abandon()` is for a scope whose end is not in your hands. The motivating case is an HTTP request:
 there is no reliable moment after the handler, because `finish` does not fire when a client
 disconnects, `close` fires while the handler may still be running, and Express — including v5 —
-gives you no awaitable handler-completion signal. So `abandon()` **waits for nothing and rejects for
-nothing**, which makes it safe to call from a socket close handler, a deadline timer or a signal
-handler. What it had to clean up comes back as a value instead of an exception:
+gives you no awaitable handler-completion signal. So `abandon()` **rejects for nothing**, which
+makes it safe to call from a socket close handler, a deadline timer or a signal handler. What it had
+to clean up comes back as a value instead of an exception:
 
 ```typescript
 const outcome = await asyncPool.abandon();
 
-if (outcome.openTransaction === 'left-open') {
-    // A transaction outlived the code that opened it. Usually the handler is simply still running
-    // and will commit; worth a metric so a persistent one shows up as the leak it is.
+if (outcome.openTransaction !== 'none') {
+    // A transaction was still open when the client went away. 'finished' is a handler that ran on
+    // and finalised it; 'lost' and 'rolled-back' discarded its work. Worth a metric.
     logger.warn('abandoned a scope with an open transaction', outcome);
 }
 ```
 
 **A client disconnecting does not stop the handler.** Node runs it to completion, so a request that
-was mid-transaction when the socket closed will still commit. `abandon()` therefore does **not** roll
-an open transaction back by default — doing so would throw away work the handler is about to commit.
-It leaves the transaction and its connection to the handler that owns them, and reports
-`openTransaction: 'left-open'`. The connection is reclaimed when the handler finishes, the same as
-for a request that was never interrupted.
+was mid-transaction when the socket closed will still commit. `abandon()` therefore **waits for an
+open transaction** before it ends the scope: until the handler commits or rolls it back
+(`openTransaction: 'finished'`), or until the server ends the transaction's session, which rolls it
+back (`'lost'`). The scope ends before any transaction the handler would begin after that one, and
+what the handler does on it from then on fails, as work on an ended scope does. With
+`lockAfterFlush: false` it carries on without the scope instead, which is only safe with
+`keepConnections: 0` and `keepPrimaryConnection: false`, where every query and transaction hands its
+own connection back.
+
+The server's timeouts are what bound the wait for a handler that never finishes. Set
+`idle_in_transaction_session_timeout` on the driver's pool, and from PostgreSQL 17
+`transaction_timeout` (through `options: '-c transaction_timeout=…'`). Both are off by default.
+Awaiting `abandon()` inside the open transaction's own flow waits on itself.
 
 When reclaiming the connection matters more than the in-flight work — a hard deadline, where a
-handler has had its grace period and is presumed stuck — pass `rollbackOpenTransaction`:
+handler has had its grace period and is presumed stuck — pass `rollbackOpenTransaction`, which ends
+the scope at once:
 
 ```typescript
 import {AsyncResource} from 'node:async_hooks';

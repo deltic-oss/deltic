@@ -10,7 +10,7 @@ every other way out of a transaction leaked it, and everything that waited on it
 
 **Added:**
 
-- `abandon()` ends a context whatever state it is in: it waits for nothing and rejects for nothing.
+- `abandon()` ends a context once its open transaction has ended, and rejects for nothing.
   What it had to clean up is returned as an `AbandonedScope` (`openTransaction`,
   `releasedConnections`, `failures`) rather than thrown, so it is safe to call from the places where
   a scope turns out to be over but no result can be handled: a socket close handler, a deadline
@@ -21,12 +21,15 @@ every other way out of a transaction leaked it, and everything that waited on it
   included — gives no awaitable handler-completion signal, so `flush()` could never be placed
   correctly for a request scope.
 
-  By default `abandon()` **leaves an open transaction alone** (`openTransaction: 'left-open'`). A
-  client disconnecting does not stop the handler — Node runs it to completion — so the transaction
-  may still be committed by work that is still running, and rolling it back would discard that work.
-  The connection is reclaimed when the handler finishes. Pass `{rollbackOpenTransaction: true}` to
-  force the rollback where reclaiming the connection matters more than the in-flight work, typically
-  a hard deadline after a grace period.
+  By default `abandon()` **waits for an open transaction**. A client disconnecting does not stop the
+  handler — Node runs it to completion — so the transaction may still be committed by work that is
+  still running, and rolling it back would discard that work. The scope ends once the handler
+  commits or rolls the transaction back (`openTransaction: 'finished'`), or once the server ends the
+  transaction's session (`'lost'`), before any transaction the handler would begin after it. The
+  server's `idle_in_transaction_session_timeout`, and from PostgreSQL 17 `transaction_timeout`, bound
+  the wait. Pass `{rollbackOpenTransaction: true}` to end the scope at once with a rollback, where
+  reclaiming the connection matters more than the in-flight work, typically a hard deadline after a
+  grace period.
 
 - `transactionWaitTimeoutMs` bounds how long `begin()` queues behind a transaction that is already
   active in the same context. Unset it waits indefinitely, as before. Queueing itself is intended

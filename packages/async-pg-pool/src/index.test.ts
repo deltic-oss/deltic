@@ -150,6 +150,18 @@ describe('AsyncPgPool', () => {
         return outcome === stillPending ? 'exhausted' : outcome;
     };
     /**
+     * Has the server end the session of a connection, and waits until the connection noticed.
+     * Only `end` is listened to here: an `error` without a listener takes the process down,
+     * which is what the pool has to prevent.
+     */
+    const endSessionOf = async (connection: Connection): Promise<void> => {
+        const ended = new Promise<void>(resolve => connection.once('end', () => resolve()));
+        const {rows: [backend]} = await connection.query<{pid: number}>('SELECT pg_backend_pid() AS pid');
+        await pool.query('SELECT pg_terminate_backend($1)', [backend!.pid]);
+
+        expect(await outcomeWithin(ended, 2000)).not.toBe(stillPending);
+    };
+    /**
      * Runs a unit of work in a context scope of its own and flushes afterwards, the
      * way a request or message handler would.
      */
@@ -1219,19 +1231,6 @@ describe('AsyncPgPool', () => {
      * place that can neither wait nor handle a rejection.
      */
     describe('connections whose session the server ends', () => {
-        /**
-         * Has the server end the session of a connection, and waits until the connection noticed.
-         * Only `end` is listened to here: an `error` without a listener takes the process down,
-         * which is what the pool has to prevent.
-         */
-        const endSessionOf = async (connection: Connection): Promise<void> => {
-            const ended = new Promise<void>(resolve => connection.once('end', () => resolve()));
-            const {rows: [backend]} = await connection.query<{pid: number}>('SELECT pg_backend_pid() AS pid');
-            await pool.query('SELECT pg_terminate_backend($1)', [backend!.pid]);
-
-            expect(await outcomeWithin(ended, 2000)).not.toBe(stillPending);
-        };
-
         test('refuses to commit a transaction whose session ended', databaseTest, async () => {
             const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
 
@@ -1340,7 +1339,7 @@ describe('AsyncPgPool', () => {
     });
 
     describe('abandoning a scope that cannot end itself', () => {
-        test('leaves an open transaction for its owner and preserves the work by default', databaseTest, async () => {
+        test('waits for the open transaction to be committed, then ends the scope', databaseTest, async () => {
             const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
             const context = asyncScopedContext();
             const scoped = new AsyncPgPool(dedicated, {}, context);
@@ -1352,19 +1351,82 @@ describe('AsyncPgPool', () => {
                     // it holds the transaction, and abandon fires before it commits.
                     const transaction = await scoped.begin();
                     await transaction.query(insertLedgerEntry, [identifier, 'still-committing']);
+                    const abandoned = scoped.abandon();
 
-                    const outcome = await scoped.abandon();
-
-                    expect(outcome.openTransaction).toBe('left-open');
-                    expect(outcome.failures).toEqual([]);
+                    expect(await outcomeWithin(abandoned, 200)).toBe(stillPending);
 
                     // The owner runs on and commits, exactly as a disconnected request's handler does.
                     await scoped.commit(transaction);
+
+                    expect(await abandoned).toEqual({openTransaction: 'finished', releasedConnections: 0, failures: []});
+                    expect(scoped.wasFlushed()).toEqual(true);
                 });
 
                 const result = await pool.query(selectLedgerEntry, [identifier]);
 
                 expect(result.rows).toEqual([{note: 'still-committing'}]);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('ends the scope once the session of the open transaction ended', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+            const context = asyncScopedContext();
+            const scoped = new AsyncPgPool(dedicated, {}, context);
+
+            try {
+                await context.run(async () => {
+                    const transaction = await scoped.begin();
+                    const abandoned = scoped.abandon();
+                    await endSessionOf(transaction);
+
+                    expect(await outcomeWithin(abandoned, 2000)).toEqual({openTransaction: 'lost', releasedConnections: 0, failures: []});
+                    expect(scoped.wasFlushed()).toEqual(true);
+                });
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('refuses a transaction that would begin after the scope was abandoned', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+            const context = asyncScopedContext();
+            const scoped = new AsyncPgPool(dedicated, {}, context);
+
+            try {
+                await context.run(async () => {
+                    const first = await scoped.begin();
+                    const abandoned = scoped.abandon();
+                    const second = scoped.begin();
+                    void second.catch(() => undefined);
+
+                    await scoped.commit(first);
+                    await abandoned;
+
+                    await expect(second).rejects.toThrow('already flushed');
+                });
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('lets the flow finalise a transaction whose session ended after its scope was abandoned', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+            const context = asyncScopedContext();
+            const scoped = new AsyncPgPool(dedicated, {lockAfterFlush: false}, context);
+
+            try {
+                await context.run(async () => {
+                    const transaction = await scoped.begin();
+                    const abandoned = scoped.abandon();
+                    await endSessionOf(transaction);
+                    await abandoned;
+
+                    await scoped.rollback(transaction);
+
+                    expect(await outcomeWithin(scoped.runInTransaction(async () => 'next'), 2000)).toEqual('next');
+                });
             } finally {
                 await outcomeWithin(dedicated.end(), 2000);
             }
@@ -1397,7 +1459,7 @@ describe('AsyncPgPool', () => {
             }
         });
 
-        test('settles without waiting for the transaction it is abandoning', databaseTest, async () => {
+        test('settles without waiting when asked to reclaim the connection', databaseTest, async () => {
             const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
             const context = asyncScopedContext();
             const scoped = new AsyncPgPool(dedicated, {}, context);
