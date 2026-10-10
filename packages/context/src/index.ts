@@ -109,8 +109,6 @@ export class Context<C extends ContextData<C>> implements ContextOperator<C> {
             throw new UnableToAttachContext();
         }
 
-        // Defined rather than assigned: assigning an own `__proto__` key, which `JSON.parse`
-        // produces, would invoke the inherited setter and replace the prototype of the context.
         for (const [key, value] of Object.entries(context)) {
             Object.defineProperty(store, key, {value, writable: true, enumerable: true, configurable: true});
         }
