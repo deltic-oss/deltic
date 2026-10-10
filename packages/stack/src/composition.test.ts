@@ -234,11 +234,11 @@ describe('composing outbox relays', () => {
         expect(() =>
             setupMultiOutboxRelay(container, {
                 pool: orders.pool,
-                mutex: orders.mutex,
                 relays: {
                     orders_outbox: {
                         outboxRepository: orders.outboxRepository,
                         dispatcher: orders.dispatcher,
+                        lockId: 7101,
                     },
                 },
             }),
