@@ -118,6 +118,10 @@ export function createTestTooling<
             throw new Error('Invalid tools setup, using when without setting up a service.');
         }
 
+        // A command that records nothing never reaches the message repository, so the events of an
+        // earlier action would otherwise still be reported as emitted.
+        messageRepository.clearLastCommit();
+
         try {
             const result = await bus.handle(input);
 
@@ -150,6 +154,7 @@ export function createTestTooling<
     const retrieveEntity = async () => await repository.retrieve(id);
 
     const whenAggregate = async (handle: WhenHandler<Stream>) => {
+        messageRepository.clearLastCommit();
         const aggregateRoot = await repository.retrieve(id);
         try {
             await handle({aggregateRoot, repository});
@@ -167,7 +172,7 @@ export function createTestTooling<
         } catch (e) {
             if (expectedError) {
                 if (typeof expectedError === 'function') {
-                    expect(e).toBeInstanceOf(typeof expectedError);
+                    expect(e).toBeInstanceOf(expectedError);
                 } else {
                     expect(e).toEqual(expectedError);
                 }
