@@ -20,6 +20,10 @@ export interface ContextStore<C extends ContextData<C>> {
     run<R>(store: Partial<C>, callback: () => Promise<R>): Promise<R>;
 }
 
+/**
+ * Keeps one context for the whole process, so it is only sound for one flow at a time: flows that
+ * overlap read and overwrite the same context.
+ */
 export class ContextStoreUsingMemory<C extends ContextData<C>> implements ContextStore<C> {
     constructor(private context?: Partial<C> | undefined) {
     }
@@ -82,13 +86,28 @@ export class Context<C extends ContextData<C>> implements ContextOperator<C> {
     }
 
     async run<R>(fn: () => Promise<R>, context: Partial<C> = {}): Promise<R> {
-        const inherited = this.context();
+        /**
+         * The defaults seed the inherited side rather than the provided side: a value a parent
+         * scope decided on outranks a default, so a nested run keeps what its parent set instead
+         * of falling back. That matches how slot defaults behave in `composeContextSlots`.
+         */
+        const inherited = {...this.defaults, ...this.context()};
         const merged = this.createContextValue(inherited, context);
         return this.storage.run(merged, fn);
     }
 
+    /**
+     * Writing requires a scope to write into. Outside one there is nothing to attach to —
+     * `AsyncLocalStorage` has no store until `run` creates one — so the values would land in a
+     * throwaway object and vanish. Reading outside a scope stays legal: "nothing here" is an
+     * honest answer, while "stored" would be a lie.
+     */
     attach(context: Partial<C>): void {
-        const store = this.context();
+        const store = this.storage.getStore();
+
+        if (store === undefined) {
+            throw new UnableToAttachContext();
+        }
 
         for (const [key, value] of Object.entries(context)) {
             (store as any)[key] = value;
@@ -193,6 +212,16 @@ export class ValueReadWriterUsingContext<
 export class UnableToResolveValue extends StandardError {
     constructor() {
         super('Value is not found. Forgot to set it?', 'context.unable_to_resolve_value');
+    }
+}
+
+export class UnableToAttachContext extends StandardError {
+    constructor() {
+        super(
+            'There is no active context scope to attach values to. '
+            + 'Attach from within a run, or prepare context with composeContextSlotsForTesting.',
+            'context.no_active_scope',
+        );
     }
 }
 
