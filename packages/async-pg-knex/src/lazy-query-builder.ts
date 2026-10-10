@@ -27,6 +27,17 @@ const KNEX_DELEGATE_PROPERTIES = new Set([
 ]);
 
 /**
+ * Reads a member of the knex instance for a proxy that stands in for it. Methods are bound to the
+ * instance: knex implements several of them (`ref`, `raw`, `destroy`, …) as `this.context[m](…)`,
+ * which, called on the proxy, reads `context` from the proxy instead of from knex.
+ */
+export function knexMember(knex: Knex, property: string): unknown {
+    const member: unknown = Reflect.get(knex, property);
+
+    return typeof member === 'function' ? member.bind(knex) : member;
+}
+
+/**
  * Creates a lazy Connection that defers actual database connection
  * acquisition until a query is awaited.
  */
@@ -46,9 +57,14 @@ export function createLazyConnection(knex: Knex, pool: AsyncPgPool): Connection 
                 };
             }
 
+            // A fresh builder runs on the ambient connection, like every other query from here.
+            if (prop === 'queryBuilder') {
+                return () => createLazyQueryBuilder(knex, pool);
+            }
+
             // For known knex-level properties, delegate directly
             if (typeof prop === 'string' && KNEX_DELEGATE_PROPERTIES.has(prop)) {
-                return (knex as any)[prop];
+                return knexMember(knex, prop);
             }
 
             // For symbols, delegate to knex
