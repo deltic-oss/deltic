@@ -253,16 +253,17 @@ describe('setupMultiOutboxRelay against PostgreSQL', () => {
 
         const relay = setupMultiOutboxRelay(container, {
             pool: context.poolKey,
-            mutex: context.mutexKey,
             pollIntervalMs: 50,
             relays: {
                 [primaryOutboxTable]: {
                     outboxRepository: primary.outboxRepository,
                     dispatcher: primaryDispatcherKey,
+                    lockId: 7201,
                 },
                 [secondaryOutboxTable]: {
                     outboxRepository: secondary.outboxRepository,
                     dispatcher: secondaryDispatcherKey,
+                    lockId: 7202,
                 },
             },
         });
