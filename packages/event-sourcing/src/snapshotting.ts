@@ -97,11 +97,13 @@ export class AggregateRootRepositoryWithSnapshotting<
                 state: aggregateRoot.createSnapshot(),
             };
 
-            await this.snapshots.store(snapshot);
-
+            // Events first: when the snapshot store does not share the transaction, a failure
+            // leaves a snapshot behind its stream, which retrieve() catches up on.
             if (aggregateRoot.hasUnreleasedEvents()) {
                 await this.storeRecordedEvents(aggregateRoot);
             }
+
+            await this.snapshots.store(snapshot);
 
             if (!alreadyInTransaction) {
                 await this.transactions.commit();
