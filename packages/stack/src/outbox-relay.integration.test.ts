@@ -1,9 +1,10 @@
-import {Pool} from 'pg';
+import {Pool, type PoolClient} from 'pg';
 import * as uuid from 'uuid';
 import {setTimeout as wait} from 'node:timers/promises';
 import {AsyncPgPool} from '@deltic/async-pg-pool';
 import {DependencyContainer, type ServiceKey} from '@deltic/dependency-injection';
 import type {AnyMessageFrom, MessageConsumer, MessageDispatcher} from '@deltic/messaging';
+import type {OutboxNotifyConfiguration} from '@deltic/messaging/pg/outbox-repository';
 import {StaticMutexUsingMemory} from '@deltic/mutex/static-memory';
 import type {StaticMutex} from '@deltic/mutex';
 import {WaitGroup} from '@deltic/wait-group';
@@ -121,12 +122,17 @@ function wireEventSourcing(
         outboxTable?: string;
         prefix?: string;
         consumers?: MessageConsumer<TestStream>[];
+        outboxNotification?: OutboxNotifyConfiguration;
     } = {},
 ): EventSourcingServices<TestStream> {
     const {container} = context;
     const name = options.prefix ?? 'default';
     const providerKey = container.register(`provider:${name}`, {
-        factory: () => new InfrastructureProviderUsingPostgres({pool: context.poolKey}),
+        factory: () =>
+            new InfrastructureProviderUsingPostgres({
+                pool: context.poolKey,
+                outboxNotification: options.outboxNotification,
+            }),
     });
     const consumerKeys = (options.consumers ?? []).map((consumer, index) =>
         container.register(`consumer:${name}:${index}`, {factory: () => consumer}),
@@ -333,10 +339,80 @@ describe('transactional outbox guarantees', () => {
 // ============ Reactive relaying ============
 
 describe('reactive relaying', () => {
+    async function listenOn(
+        channels: string[],
+        onNotification: (channel: string) => void,
+    ): Promise<() => Promise<void>> {
+        const connection: PoolClient = await pgPool.connect();
+        // Other test files notify the central channel too, for outboxes of their own.
+        connection.on('notification', notification => {
+            if (notification.channel !== 'outbox_publish' || notification.payload === primaryOutboxTable) {
+                onNotification(notification.channel);
+            }
+        });
+
+        for (const channel of channels) {
+            await connection.query(`LISTEN ${channel}`);
+        }
+
+        return async () => {
+            for (const channel of channels) {
+                await connection.query(`UNLISTEN ${channel}`);
+            }
+
+            connection.removeAllListeners('notification');
+            connection.release();
+        };
+    }
+
+    test('notifies the outbox channel when events are recorded', async () => {
+        const notifications: string[] = [];
+        const waitGroup = new WaitGroup();
+        waitGroup.add(2);
+        const stop = await listenOn(
+            [`outbox_publish__${primaryOutboxTable}`, 'outbox_publish'],
+            channel => {
+                notifications.push(channel);
+                waitGroup.done();
+            },
+        );
+
+        try {
+            const context = createStackContext();
+            const services = wireEventSourcing(context);
+            await recordItem(context.container, services, 'item-1');
+
+            await waitGroup.wait(500).catch(() => undefined);
+
+            expect(notifications.toSorted()).toEqual(['outbox_publish', `outbox_publish__${primaryOutboxTable}`]);
+        } finally {
+            await stop();
+        }
+    });
+
+    test('sends no notification when the outbox is configured not to', async () => {
+        const notifications: string[] = [];
+        const stop = await listenOn([`outbox_publish__${primaryOutboxTable}`, 'outbox_publish'], channel => {
+            notifications.push(channel);
+        });
+
+        try {
+            const context = createStackContext();
+            const services = wireEventSourcing(context, {outboxNotification: {style: 'none'}});
+            await recordItem(context.container, services, 'item-1');
+
+            await wait(200);
+
+            expect(notifications).toEqual([]);
+        } finally {
+            await stop();
+        }
+    });
+
     test('relays events without a notification by falling back to polling', async () => {
         const dispatcher = new AwaitableDispatcher();
         const context = createStackContext();
-        const services = wireEventSourcing(context);
+        const services = wireEventSourcing(context, {outboxNotification: {style: 'none'}});
         const {container} = context;
         const dispatcherKey = container.register('relay:dispatcher', {factory: () => dispatcher});
         const relay = setupOutboxRelay<TestStream>(container, {
