@@ -46,7 +46,7 @@ export interface AsyncKnexConnectionProviderOptions {
  *     await trx('users').insert({name: 'John'});
  *     await provider.commit(trx);
  * } catch (e) {
- *     await provider.rollback(trx);
+ *     await provider.rollback(trx, e);
  *     throw e;
  * }
  * ```
@@ -110,7 +110,7 @@ export class AsyncKnexConnectionProvider implements ConnectionProvider {
      *     await trx('accounts').where('id', 2).increment('balance', 100);
      *     await provider.commit(trx);
      * } catch (e) {
-     *     await provider.rollback(trx);
+     *     await provider.rollback(trx, e);
      *     throw e;
      * }
      * ```

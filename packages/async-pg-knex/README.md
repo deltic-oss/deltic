@@ -121,10 +121,20 @@ try {
     
     await db.commit(trx);
 } catch (error) {
-    await db.rollback(trx);
+    await db.rollback(trx, error);
     throw error;
 }
 ```
+
+Hand the error to `rollback()`: it is forwarded to the pool, so whatever observes rollbacks — a
+transaction manager that counts or logs them — learns why the transaction was rolled back. The
+`ConnectionProvider` interface accepts it too, so code typed against the interface can forward it.
+
+A second `begin()` waits for the active transaction to be finalised — that is what lets two
+concurrent flows share a context. It also means a flow must never `await` a transaction it would
+itself have to finalise, because nothing can break that deadlock. Compose with `runInTransaction`,
+which joins the active transaction instead of opening a second one, and set the pool's
+`transactionWaitTimeoutMs` to turn a mistaken wait into an error rather than a hang.
 
 #### Using `runInTransaction`
 
@@ -175,16 +185,19 @@ console.log(query.toString());
 
 ### Raw Client Access
 
-When you need direct access to the underlying pg client:
+When you need direct access to an underlying pg client — a `LISTEN` loop, for instance — claim one
+from the `AsyncPgPool` the provider was built on. Note that a claimed connection is dedicated: it is
+*not* the ambient connection, so it does not participate in an active transaction, and it must be
+released in a `finally`.
 
 ```typescript
-const client = await db.claimClient();
+const client = await asyncPool.claim();
 
 try {
     await client.query('LISTEN my_channel');
     // ... do something with notifications
 } finally {
-    await db.releaseClient(client);
+    await asyncPool.release(client);
 }
 ```
 
@@ -211,8 +224,6 @@ new AsyncKnexConnectionProvider(pool: AsyncPgPool, options?: {
 | `withTransaction()` | Returns the current transaction (throws if none) |
 | `inTransaction()` | Returns `true` if currently in a transaction |
 | `runInTransaction(fn)` | Runs a function in a transaction with auto commit/rollback |
-| `claimClient()` | Claims a raw pg `Client` from the pool |
-| `releaseClient(client)` | Releases a raw pg `Client` back to the pool |
 | `destroy()` | Destroys the Knex instance |
 
 ### `Connection`
@@ -250,7 +261,7 @@ Because connections flow through `AsyncPgPool`, you get all its features:
 ```typescript
 const asyncPool = new AsyncPgPool(pgPool, {
     // Run on every connection claim
-    onClaim: client => client.query(`SET app.tenant_id = '${tenantId}'`),
+    onClaim: client => client.query(`SELECT set_config('app.tenant_id', $1, false)`, [tenantId]),
     // Run on every connection release  
     onRelease: 'RESET app.tenant_id',
     // Keep connections warm

@@ -62,6 +62,8 @@ export interface ConnectionProvider {
 
     /**
      * Rollback a transaction.
+     * @param error Optional error that caused the rollback, handed to the pool so the layers
+     * that observe rollbacks (a transaction manager counting or logging them) learn why.
      */
-    rollback(trx: Transaction): Promise<void>;
+    rollback(trx: Transaction, error?: unknown): Promise<void>;
 }
