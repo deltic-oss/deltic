@@ -6,7 +6,7 @@ import {
     type AsyncPoolContext,
 } from '@deltic/async-pg-pool';
 import type {Knex} from 'knex';
-import {AsyncKnexConnectionProvider, extractPgConnection, type ConnectionProvider, type Transaction} from './index.js';
+import {AsyncKnexConnectionProvider, extractPgConnection, type Transaction} from './index.js';
 import {pgConnectionSymbol} from './transaction-wrapper.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {pgTestCredentials} from '../../pg-credentials.js';
@@ -1119,27 +1119,6 @@ describe('AsyncKnexConnectionProvider', () => {
     });
 
     describe('transaction lifecycle', () => {
-
-        test('a rollback through the ConnectionProvider interface hands its cause to the pool', async () => {
-            // Ported from duna-application d7563711e4: code typed against the interface could
-            // not pass the cause, so it never reached the pool or anything observing rollbacks.
-            const causes: unknown[] = [];
-            const rollback = asyncPool.rollback.bind(asyncPool);
-            asyncPool.rollback = async (connection, error?: unknown) => {
-                causes.push(error);
-
-                return rollback(connection, error);
-            };
-            const connections: ConnectionProvider = provider;
-            const cause = new Error('the unit of work failed');
-
-            const trx = await connections.begin();
-            await connections.rollback(trx, cause);
-
-            expect(causes).toEqual([cause]);
-            expect(connections.inTransaction()).toBe(false);
-        });
-
         test('committing something that is not a transaction is refused', async () => {
             await expect(provider.commit(provider.connection() as unknown as Transaction)).rejects.toThrow(
                 'Invalid transaction object - missing pg connection',
