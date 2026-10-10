@@ -879,7 +879,10 @@ class UnableToProvideActiveTransaction extends StandardError {
 export class TransactionManagerUsingPg implements TransactionManager {
     constructor(private readonly pool: AsyncPgPool) {}
 
-    rollback(error?: unknown): Promise<void> {
+    // `async`, so that `withTransaction()` refusing — no active transaction — surfaces as the
+    // rejection the `Promise<void>` signature promises, rather than as a synchronous throw that
+    // `.catch()` handlers never see.
+    async rollback(error?: unknown): Promise<void> {
         return this.pool.rollback(this.pool.withTransaction(), error);
     }
 
@@ -887,7 +890,7 @@ export class TransactionManagerUsingPg implements TransactionManager {
         await this.pool.begin();
     }
 
-    commit(): Promise<void> {
+    async commit(): Promise<void> {
         return this.pool.commit(this.pool.withTransaction());
     }
 

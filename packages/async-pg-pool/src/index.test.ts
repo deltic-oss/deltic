@@ -1504,5 +1504,21 @@ describe('AsyncPgPool', () => {
                 await dedicated.end();
             }
         }, 20000);
+
+        test('rejects when committing without an active transaction', databaseTest, async () => {
+            await inScope({}, async scoped => {
+                const manager = new TransactionManagerUsingPg(scoped);
+
+                await expect(manager.commit()).rejects.toThrow('no transaction was active');
+            });
+        });
+
+        test('rejects when rolling back without an active transaction', databaseTest, async () => {
+            await inScope({}, async scoped => {
+                const manager = new TransactionManagerUsingPg(scoped);
+
+                await expect(manager.rollback()).rejects.toThrow('no transaction was active');
+            });
+        });
     });
 });
