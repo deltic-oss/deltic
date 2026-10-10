@@ -2,6 +2,7 @@ import {Pool} from 'pg';
 import {AsyncPgPool, asyncPoolContext, type AsyncPoolContext} from '@deltic/async-pg-pool';
 import {AsyncKnexConnectionProvider} from './index.js';
 import {pgConnectionSymbol} from './transaction-wrapper.js';
+import type {ConnectionProvider} from './types.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {pgTestCredentials} from '../../pg-credentials.js';
 
@@ -523,6 +524,26 @@ describe('AsyncKnexConnectionProvider', () => {
 
             const result = await provider.connection().select('*').from(tableName);
             expect(result).toHaveLength(1);
+        });
+
+        test('a rollback through the ConnectionProvider interface hands its cause to the pool', async () => {
+            // Ported from duna-application d7563711e4: code typed against the interface could
+            // not pass the cause, so it never reached the pool or anything observing rollbacks.
+            const causes: unknown[] = [];
+            const rollback = asyncPool.rollback.bind(asyncPool);
+            asyncPool.rollback = async (connection, error?: unknown) => {
+                causes.push(error);
+
+                return rollback(connection, error);
+            };
+            const connections: ConnectionProvider = provider;
+            const cause = new Error('the unit of work failed');
+
+            const trx = await connections.begin();
+            await connections.rollback(trx, cause);
+
+            expect(causes).toEqual([cause]);
+            expect(connections.inTransaction()).toBe(false);
         });
     });
 
