@@ -647,6 +647,37 @@ describe('AsyncPgPool', () => {
             expect(unscoped.wasFlushed()).toEqual(false);
         });
 
+        /**
+         * The README documents the default context as a single, process-wide scope: anything that
+         * serves concurrent flows has to pass an `AsyncLocalStorage`-backed context. This pins that
+         * statement, so the documentation cannot drift from the behaviour unnoticed.
+         */
+        test('the default context is one scope for the whole process, as the README documents', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+            const scoped = new AsyncPgPool(dedicated);
+            const transactionStarted = Promise.withResolvers<void>();
+            const observed = Promise.withResolvers<void>();
+
+            try {
+                const firstFlow = scoped.runInTransaction(async () => {
+                    transactionStarted.resolve();
+                    await observed.promise;
+                });
+
+                await transactionStarted.promise;
+                // Code that has nothing to do with the first flow sees its transaction, and would
+                // join it through runInTransaction.
+                const seenElsewhere = await (async () => scoped.inTransaction())();
+                observed.resolve();
+                await firstFlow;
+
+                expect(seenElsewhere).toBe(true);
+
+                await scoped.flush();
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
     });
 
     describe('returning connections to the pool', () => {
