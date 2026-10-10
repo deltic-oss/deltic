@@ -2,7 +2,12 @@ import {DependencyContainer, forgeServiceKey, type ServiceKey} from '@deltic/dep
 import type {MessageDispatcher, StreamDefinition} from '@deltic/messaging';
 import {OutboxRelay, type OutboxRepository} from '@deltic/messaging/outbox';
 import {OutboxRelayRunner} from '@deltic/messaging/pg/outbox-relay-runner';
-import {MultiOutboxRelayRunner} from '@deltic/messaging/pg/multi-outbox-relay-runner';
+import {
+    MultiOutboxRelayRunner,
+    type ClaimFailure,
+    type RelayedOutbox,
+    type RelayFailure,
+} from '@deltic/messaging/pg/multi-outbox-relay-runner';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {StaticMutex} from '@deltic/mutex';
 
@@ -192,6 +197,18 @@ export interface MultiOutboxRelayEntry {
      * Service key for the message dispatcher.
      */
     dispatcher: ServiceKey<MessageDispatcher<any>>;
+
+    /**
+     * The advisory lock that makes a process the one relaying this outbox; taking it is what starts
+     * the relaying. Unique among the entries, and used by no other advisory lock in the database.
+     */
+    lockId: number;
+
+    /**
+     * Outboxes of one group share a connection for their locks and notifications. Defaults to
+     * `'default'`.
+     */
+    group?: string;
 }
 
 /**
@@ -209,11 +226,6 @@ export interface MultiOutboxRelayConfig {
      * Service key for the AsyncPgPool used by the relay runner.
      */
     pool: ServiceKey<AsyncPgPool>;
-
-    /**
-     * Service key for the distributed mutex used for leader election.
-     */
-    mutex: ServiceKey<StaticMutex>;
 
     /**
      * Map of relay entries keyed by identifier (typically the outbox table name).
@@ -247,9 +259,36 @@ export interface MultiOutboxRelayConfig {
     pollIntervalMs?: number;
 
     /**
-     * Retry interval in milliseconds when distributed lock acquisition fails. Defaults to 1000.
+     * How often the runner takes the locks of outboxes no process holds, and checks that the
+     * connections of its groups are alive. Defaults to 1000.
      */
-    lockRetryMs?: number;
+    lockAcquisitionIntervalMs?: number;
+
+    /**
+     * The groups this process relays. Defaults to every group.
+     */
+    holdGroups?: string[];
+
+    /**
+     * How many outboxes are relayed at the same time. Defaults to 10.
+     */
+    maxConcurrentRelays?: number;
+
+    /**
+     * The longest wait between two attempts at an outbox whose batches keep failing. Defaults to
+     * 60 seconds.
+     */
+    failureBackoffCeilingMs?: number;
+
+    /**
+     * Reports a failed batch that will be retried.
+     */
+    onRelayFailure?: (failure: RelayFailure) => void;
+
+    /**
+     * Reports a group whose locks could not be taken or whose connection failed.
+     */
+    onClaimFailure?: (failure: ClaimFailure) => void;
 
     /**
      * Prefix used for auto-generated service keys.
@@ -281,8 +320,8 @@ export interface MultiOutboxRelayServices {
  * and forwards each to its corresponding message dispatcher.
  *
  * Compared to running multiple single-stream relays, the multi relay:
- * - Uses a single PostgreSQL LISTEN connection for all outboxes
- * - Holds a single distributed lock
+ * - Takes an advisory lock per outbox, so the outboxes are spread over the processes running it
+ * - Uses one PostgreSQL connection per group, for the locks and the notifications of its outboxes
  * - Processes different outboxes concurrently (but each outbox sequentially)
  * - Routes notifications by identifier (table name) to the correct relay
  *
@@ -306,15 +345,16 @@ export interface MultiOutboxRelayServices {
  *
  * const relay = setupMultiOutboxRelay(container, {
  *     pool: poolKey,
- *     mutex: mutexKey,
  *     relays: {
  *         'order_outbox': {
  *             outboxRepository: orderES.outboxRepository,
  *             dispatcher: orderDispatcher,
+ *             lockId: 7101,
  *         },
  *         'invoice_outbox': {
  *             outboxRepository: invoiceES.outboxRepository,
  *             dispatcher: invoiceDispatcher,
+ *             lockId: 7102,
  *         },
  *     },
  * });
@@ -333,25 +373,30 @@ export function setupMultiOutboxRelay(
 
     container.register(key, {
         factory: (c) => {
-            const relays: Record<string, OutboxRelay<any>> = {};
+            const outboxes: Record<string, RelayedOutbox> = {};
 
             for (const [identifier, entry] of Object.entries(config.relays)) {
-                relays[identifier] = new OutboxRelay(
-                    c.resolve(entry.outboxRepository),
-                    c.resolve(entry.dispatcher),
-                );
+                outboxes[identifier] = {
+                    relay: new OutboxRelay(c.resolve(entry.outboxRepository), c.resolve(entry.dispatcher)),
+                    lockId: entry.lockId,
+                    group: entry.group,
+                };
             }
 
             return new MultiOutboxRelayRunner(
                 c.resolve(config.pool),
-                c.resolve(config.mutex),
-                relays,
+                outboxes,
                 {
                     channelName: config.channelName,
                     batchSize: config.batchSize,
                     commitSize: config.commitSize,
                     pollIntervalMs: config.pollIntervalMs,
-                    lockRetryMs: config.lockRetryMs,
+                    lockAcquisitionIntervalMs: config.lockAcquisitionIntervalMs,
+                    holdGroups: config.holdGroups,
+                    maxConcurrentRelays: config.maxConcurrentRelays,
+                    failureBackoffCeilingMs: config.failureBackoffCeilingMs,
+                    onRelayFailure: config.onRelayFailure,
+                    onClaimFailure: config.onClaimFailure,
                 },
             );
         },

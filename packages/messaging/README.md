@@ -137,7 +137,6 @@ Chain multiple consumers, add locking, or dispatch to type-specific handlers:
 ```typescript
 import {DispatchingMessageConsumer} from '@deltic/messaging/dispatching-message-consumer';
 import {LockingMessageConsumer} from '@deltic/messaging/locking-message-consumer';
-import {SequentialMessageConsumer} from '@deltic/messaging/sequential-message-consumer';
 import {MessageConsumerChain} from '@deltic/messaging/message-consumer-chain';
 ```
 
@@ -151,6 +150,50 @@ message; when the failure leads to a redelivery they receive it again, so they n
 ```typescript
 const consumer = new MessageConsumerChain(updateProjection, sendWebhook);
 ```
+
+### Consuming One Message at a Time
+
+To hand a consumer one message at a time, in the order they arrive, push them onto a
+`SequentialProcessQueue` from `@deltic/process-queue` whose processor calls the consumer:
+
+```typescript
+import type {AnyMessageFrom} from '@deltic/messaging';
+import {SequentialProcessQueue} from '@deltic/process-queue';
+
+const queue = new SequentialProcessQueue<AnyMessageFrom<OrderStream>>({
+    processor: message => consumer.consume(message),
+    // without skipping, a failed message stops the queue (see `stopOnError`)
+    onError: async ({skipCurrentTask}) => skipCurrentTask(),
+});
+
+await queue.push(message); // settles once this message has been consumed
+```
+
+`PartitionedProcessQueue` keeps one such queue per partition, picked by a number you derive from the
+message, such as a hash of its aggregate root id. Each aggregate's messages then keep their order,
+while messages in different partitions are consumed side by side.
+
+### Scoping Consumption to a Tenant
+
+`TenantScopingMessageConsumer` runs every message in a context scope of its own, with the tenant from
+its `tenant_id` header. Repositories read the tenant from that same context:
+
+```typescript
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {Context, ValueReadWriterUsingContext} from '@deltic/context';
+import {TenantScopingMessageConsumer} from '@deltic/messaging/tenant-scoping-message-consumer';
+
+const tenantContext = new Context<{tenant_id: string}>(new AsyncLocalStorage());
+const consumer = new TenantScopingMessageConsumer(tenantContext, projection);
+
+// repositories read the tenant through the same context:
+const tenantId = new ValueReadWriterUsingContext(tenantContext, 'tenant_id');
+const messages = new MessageRepositoryUsingPg<OrderStream>(asyncPool, 'order_events', {tenantContext: tenantId});
+```
+
+Back the context with `AsyncLocalStorage` when messages are consumed at the same time, such as by a
+relay with concurrency: it gives every scope its own tenant. `RunMessageConsumerInContext` does the
+same for any other context values resolved from a message.
 
 ### Outbox Pattern
 
@@ -238,13 +281,12 @@ import {UpcasterUpcastingMessageRepository} from '@deltic/messaging/upcasting';
 | `@deltic/messaging/message-decorator-chain` | Chains multiple decorators |
 | `@deltic/messaging/message-dispatcher-chain` | Runs multiple dispatchers in order |
 | `@deltic/messaging/locking-message-consumer` | Adds mutex locking to consumption |
-| `@deltic/messaging/sequential-message-consumer` | Sequential message processing |
 | `@deltic/messaging/reducing-message-consumer` | Reduce pattern for consumers |
 | `@deltic/messaging/exactly-once-message-consumer-decorator` | Idempotent message processing |
 | `@deltic/messaging/context-message-decorator` | Adds context values to headers |
 | `@deltic/messaging/decorator-for-event-ids` | Adds unique IDs to events |
 | `@deltic/messaging/tenant-id-decorator` | Adds tenant ID to headers |
-| `@deltic/messaging/tenant-scoping-message-consumer` | Scopes consumption to tenant context |
+| `@deltic/messaging/tenant-scoping-message-consumer` | Runs each message in a scope of its tenant |
 | `@deltic/messaging/run-message-consumer-in-context` | Runs consumer within async context |
 | `@deltic/messaging/message-delivery-counter` | Tracks delivery counts |
 | `@deltic/messaging/outbox` | Outbox interface |

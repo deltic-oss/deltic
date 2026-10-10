@@ -190,4 +190,48 @@ describe('Delayed Outbox Repository', () => {
         expect(consumedLeft).toEqual(4);
         expect(secondClean).toEqual(4);
     });
+
+    test('the delay grows with every re-persist of the same message', async () => {
+        await dispatcher.send(createMessage('ping', 1));
+        testClock.advance(10_000);
+
+        const [firstAttempt] = await collect(repository.retrieveBatch(10));
+        await repository.markConsumed([firstAttempt]);
+        await repository.persist([firstAttempt]);
+        testClock.advance(10_000);
+
+        const pending = await collect(repository.retrieveBatch(10));
+
+        expect(firstAttempt.headers['attempt']).toEqual(1);
+        expect(pending.map(m => m.headers['attempt'])).toEqual([2]);
+    });
+
+    /**
+     * The attempt header travels inside the message payload, so for messages that came
+     * in over a broker it is producer-controlled. A value that is not a finite number
+     * would make the computed delay NaN, which Postgres rejects as an invalid timestamp —
+     * taking down the persist of the whole batch, including the healthy messages in it.
+     */
+    test('a message with an unusable attempt header does not break the batch it is in', async () => {
+        await expect(repository.persist([
+            createMessage('ping', 1, {attempt: 'not-a-number'}),
+            createMessage('pong', 2),
+        ])).resolves.toBeUndefined();
+
+        expect(await repository.numberOfPendingMessages()).toEqual(2);
+    });
+
+    test.each([
+        ['not a number', 'retry'],
+        ['negative', -2],
+        ['fractional', 1.5],
+        ['an object', {count: 2}],
+    ])('an attempt header that is %s counts as a first write', async (_name, attempt) => {
+        await repository.persist([createMessage('ping', 1, {attempt})]);
+        testClock.advance(10_000);
+
+        const [stored] = await collect(repository.retrieveBatch(10));
+
+        expect(stored.headers['attempt']).toEqual(1);
+    });
 });

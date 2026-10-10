@@ -183,6 +183,39 @@ const repository = new AggregateRepositoryWithProjector<OrderStream>(
 await repository.persist(order);
 ```
 
+### Testing Aggregates
+
+`createTestTooling` sets up an in-memory repository for one aggregate and given/when/then helpers:
+
+```typescript
+import {createTestTooling} from '@deltic/event-sourcing/test-tooling';
+
+const {given, when, whenAggregate, then, expectNoEvents, expectError, createMessage} =
+    createTestTooling<OrderStream, OrderService>('order-1', orderFactory, createOrderService);
+
+test('shipping an order', async () => {
+    given(createMessage('OrderPlaced', {total: 100}));
+
+    await whenAggregate(async ({aggregateRoot}) => aggregateRoot.ship('track-1'));
+
+    then(createMessage('OrderShipped', {trackingNumber: 'track-1'}));
+});
+
+test('shipping an order twice', async () => {
+    given(
+        createMessage('OrderPlaced', {total: 100}),
+        createMessage('OrderShipped', {trackingNumber: 'track-1'}),
+    );
+
+    expectError(OrderAlreadyShipped); // an error instance is compared by value, a class by type
+    await when('ship_order', {id: 'order-1', trackingNumber: 'track-1'});
+});
+```
+
+`then()`, `expectNoEvents()` and `emittedEvents()` only see the events recorded by the latest
+`when()` or `whenAggregate()`: each one starts from an empty slate, so an action that records
+nothing emits no events even after an earlier one that did.
+
 ## API Reference
 
 ### Core Interfaces

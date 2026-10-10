@@ -311,6 +311,9 @@ importers:
 
   packages/process-queue:
     dependencies:
+      '@deltic/error-standard':
+        specifier: workspace:^
+        version: link:../error-standard
       '@deltic/wait-group':
         specifier: workspace:^
         version: link:../wait-group

@@ -1,4 +1,5 @@
 import type {KeyValueStore} from './index.js';
+import type {QueryResult, QueryResultRow} from 'pg';
 import type {AsyncPgPool} from '@deltic/async-pg-pool';
 import type {ValueReader} from '@deltic/context';
 import type {IdConversion} from '@deltic/uid';
@@ -31,6 +32,13 @@ export type StoredRecord<Value extends ObjectType> = {
     [index: string | number | symbol]: any;
 };
 
+/**
+ * Column names are used exactly as configured; unquoted, Postgres would fold them to lower case.
+ */
+function quoted(columnName: string): string {
+    return `"${columnName}"`;
+}
+
 export class KeyValueStoreWithColumnsUsingPg<
     Key extends KeyType<Key>,
     Value extends ObjectType,
@@ -52,31 +60,28 @@ export class KeyValueStoreWithColumnsUsingPg<
     }
 
     async persist(key: Key, value: Value): Promise<void> {
-        const conn = await this.pool.primary();
         const identityColumns: string[] = [];
         const valueColums: string[] = [];
         const references: string[] = [];
         const values: any[] = [];
 
-        const tenantId = this.tenantContext?.mustResolve();
+        const tenantId = this.databaseTenantId();
 
-        if (tenantId) {
+        if (tenantId !== undefined) {
             identityColumns.push('tenant_id');
-            values.push(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
+            values.push(tenantId);
             references.push(`$${values.length}`);
         }
 
-        for (const {payloadKey, columnName, toDatabaseValue} of this.identityColumns) {
-            identityColumns.push(columnName);
-            const columnValue = key[payloadKey];
-            values.push(toDatabaseValue?.(columnValue) ?? columnValue);
+        for (const column of this.identityColumns) {
+            identityColumns.push(column.columnName);
+            values.push(this.databaseValueOf(column, key));
             references.push(`$${values.length}`);
         }
 
-        for (const {payloadKey, columnName, toDatabaseValue} of this.storedColumns) {
-            valueColums.push(columnName);
-            const columnValue = value[payloadKey];
-            values.push(toDatabaseValue?.(columnValue) ?? columnValue);
+        for (const column of this.storedColumns) {
+            valueColums.push(column.columnName);
+            values.push(this.databaseValueOf(column, value));
             references.push(`$${values.length}`);
         }
 
@@ -84,41 +89,23 @@ export class KeyValueStoreWithColumnsUsingPg<
         values.push({value});
         references.push(`$${values.length}`);
 
-        await conn.query(
+        await this.query(
             `
-            INSERT INTO ${this.tableName} (${[...identityColumns, ...valueColums].map(name => `"${name}"`).join(', ')})
+            INSERT INTO ${this.tableName} (${[...identityColumns, ...valueColums].map(quoted).join(', ')})
                 VALUES (${references.join(', ')})
-            ON CONFLICT (${identityColumns.join(', ')}) DO UPDATE
-                SET ${valueColums.map(name => `"${name}" = EXCLUDED."${name}"`).join(', ')}
+            ON CONFLICT (${identityColumns.map(quoted).join(', ')}) DO UPDATE
+                SET ${valueColums.map(name => `${quoted(name)} = EXCLUDED.${quoted(name)}`).join(', ')}
         `,
             values,
         );
     }
 
     async retrieve(key: Key): Promise<Value | undefined> {
-        const conn = await this.pool.primary();
-        const whereClauses: string[] = [];
-        const values: any[] = [];
-        const tenantId = this.tenantContext?.mustResolve();
-
-        if (tenantId) {
-            values.push(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
-            whereClauses.push(`tenant_id = $${values.length}`);
-        }
-
-        for (const {payloadKey, columnName, toDatabaseValue} of this.identityColumns) {
-            values.push(
-                Object.prototype.hasOwnProperty.call(key, payloadKey)
-                    ? (toDatabaseValue?.(key[payloadKey]) ?? payloadKey)
-                    : null,
-            );
-            whereClauses.push(`${columnName} = $${values.length}`);
-        }
-
-        const {rows} = await conn.query<StoredRecord<Value>>(
+        const {condition, values} = this.recordCondition(key);
+        const {rows} = await this.query<StoredRecord<Value>>(
             `
             SELECT deltic_payload FROM ${this.tableName}
-            WHERE ${whereClauses.join(' AND ')}
+            WHERE ${condition}
             LIMIT 1
         `,
             values,
@@ -128,37 +115,84 @@ export class KeyValueStoreWithColumnsUsingPg<
     }
 
     async remove(key: Key): Promise<void> {
-        const conn = await this.pool.primary();
-        const whereClauses: string[] = [];
-        const values: any[] = [];
-        const tenantId = this.tenantContext?.mustResolve();
-
-        if (tenantId) {
-            values.push(this.tenantIdConversion?.toDatabase(tenantId) ?? tenantId);
-            whereClauses.push(`tenant_id = $${values.length}`);
-        }
-
-        for (const {payloadKey, columnName, toDatabaseValue} of this.identityColumns) {
-            values.push(
-                Object.prototype.hasOwnProperty.call(key, payloadKey)
-                    ? (toDatabaseValue?.(key[payloadKey]) ?? payloadKey)
-                    : null,
-            );
-            whereClauses.push(`${columnName} = $${values.length}`);
-        }
-
-        await conn.query(
+        const {condition, values} = this.recordCondition(key);
+        await this.query(
             `
             DELETE FROM ${this.tableName}
-            WHERE ${whereClauses.join(' AND ')}
+            WHERE ${condition}
         `,
             values,
         );
     }
 
     async clear(): Promise<void> {
-        const conn = await this.pool.primary();
-        await conn.query(`TRUNCATE TABLE ${this.tableName} RESTART IDENTITY CASCADE`);
+        const tenantId = this.databaseTenantId();
+
+        if (tenantId === undefined) {
+            await this.query(`DELETE FROM ${this.tableName}`);
+        } else {
+            await this.query(`DELETE FROM ${this.tableName} WHERE tenant_id = $1`, [tenantId]);
+        }
+    }
+
+    /**
+     * A store with a tenant context is scoped to the current tenant in every operation and refuses to
+     * operate when no tenant can be resolved. Tenant ids such as `0` and `''` are scoped like any other.
+     */
+    private databaseTenantId(): string | number | undefined {
+        if (this.tenantContext === undefined) {
+            return undefined;
+        }
+
+        const tenantId = this.tenantContext.mustResolve();
+
+        return this.tenantIdConversion === undefined ? tenantId : this.tenantIdConversion.toDatabase(tenantId);
+    }
+
+    /**
+     * Selects the record of a key: its tenant, and the identity columns holding the values `persist`
+     * writes for that key.
+     */
+    private recordCondition(key: Key): {condition: string; values: unknown[]} {
+        const clauses: string[] = [];
+        const values: unknown[] = [];
+        const tenantId = this.databaseTenantId();
+
+        if (tenantId !== undefined) {
+            values.push(tenantId);
+            clauses.push(`tenant_id = $${values.length}`);
+        }
+
+        for (const column of this.identityColumns) {
+            values.push(
+                Object.prototype.hasOwnProperty.call(key, column.payloadKey) ? this.databaseValueOf(column, key) : null,
+            );
+            clauses.push(`${quoted(column.columnName)} = $${values.length}`);
+        }
+
+        return {condition: clauses.join(' AND '), values};
+    }
+
+    /**
+     * Writing a record and looking it up derive a column's value here, so they cannot disagree.
+     */
+    private databaseValueOf<Columns extends ObjectType>(
+        column: ResolvedColumnAndToDatabaseFn<Columns>,
+        source: Columns,
+    ): PropertyType {
+        const value = source[column.payloadKey];
+
+        return column.toDatabaseValue?.(value) ?? value;
+    }
+
+    private async query<Row extends QueryResultRow>(sql: string, values: unknown[] = []): Promise<QueryResult<Row>> {
+        const connection = await this.pool.primary();
+
+        try {
+            return await connection.query<Row>(sql, values);
+        } finally {
+            await this.pool.release(connection);
+        }
     }
 
     private resolveColumnParameter<Columns extends ObjectType>(

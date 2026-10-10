@@ -42,6 +42,22 @@ await store.remove('user-1');
 await store.clear();
 ```
 
+### Key Normalisation
+
+Both stores normalise a key before they use it, so keys that are equal as values address the same
+entry. The default, `SortingKeyNormalisation`, sorts the properties of an object key and of every
+object nested in it: `{first: 1, second: 2}` and `{second: 2, first: 1}` are the same key. Arrays keep
+their order, and anything other than a plain object is used as it is.
+
+Pass a `KeyNormalisation` of your own as the `keyNormalisation` option to decide which keys are the
+same:
+
+```typescript
+const store = new KeyValueStoreUsingMemory<string, {name: string}>({
+    keyNormalisation: {normalise: key => key.toLowerCase()},
+});
+```
+
 ### PostgreSQL Store
 
 ```typescript
@@ -72,6 +88,10 @@ const store = new KeyValueStoreUsingPg<string, Settings, string, TenantId>(async
 });
 ```
 
+A store with a `tenantContext` scopes every operation (`persist`, `retrieve`, `remove` and `clear`) to the
+tenant the context resolves to, and rejects the operation when no tenant can be resolved. The same key can
+therefore hold a different value for every tenant. A store without a `tenantContext` is not tenant scoped.
+
 #### Custom Key Conversion
 
 Transform keys before storage:
@@ -80,6 +100,30 @@ Transform keys before storage:
 const store = new KeyValueStoreUsingPg<UserId, Profile, string>(asyncPool, {
     tableName: 'profiles',
     keyConversion: (userId) => userId.toString(),
+});
+```
+
+The conversion receives the normalised key. Without one, the store hands the key to `pg` as it is,
+which stores an object key as its JSON; that has to fit the `key` column's 255 characters.
+Interpolating an object key (`` key => `prefix:${key}` ``) turns every one of them into
+`prefix:[object Object]`.
+
+#### Hashed Keys
+
+`objectHashKeyConversion` stores an object or array key as a SHA3-512 hash of its contents, and any
+other key as its string form. A hash fits the `key` column whatever the size of the key, but it cannot
+be read back into the key. It needs `object-hash`:
+
+```bash
+npm install object-hash
+```
+
+```typescript
+import {objectHashKeyConversion} from '@deltic/key-value/object-hash';
+
+const store = new KeyValueStoreUsingPg<{tenant: string; day: string}, Report>(asyncPool, {
+    tableName: 'reports',
+    keyConversion: objectHashKeyConversion,
 });
 ```
 
@@ -106,6 +150,10 @@ await store.persist(
 );
 ```
 
+The constructor optionally takes a tenant context and a tenant id conversion as its fifth and sixth
+arguments. Tenant scoping then works as for `KeyValueStoreUsingPg`, using a `tenant_id` column that must be
+part of the table's unique key.
+
 ## API Reference
 
 ### `KeyValueStore<Key, Value>` (interface)
@@ -115,7 +163,15 @@ await store.persist(
 | `persist(key, value)` | Stores a key-value pair (upserts on conflict) |
 | `retrieve(key)` | Returns the value or `undefined` if not found |
 | `remove(key)` | Deletes a key-value pair |
-| `clear()` | Removes all entries |
+| `clear()` | Removes all entries; for a tenant-scoped store, those of the current tenant |
+
+### `KeyNormalisation<Key>` (interface)
+
+| Method | Description |
+|--------|-------------|
+| `normalise(key)` | Returns the form the store addresses the key by |
+
+`SortingKeyNormalisation` is the default: it sorts the properties of plain objects, recursively.
 
 ### `createKeyValueSchemaQuery(tableName, ifNotExists?)`
 

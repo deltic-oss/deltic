@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
 import {StandardError} from '@deltic/error-standard';
 
 export type ContextValue = null | object | undefined | string | number | boolean | ContextValue[] | ContextObject;
@@ -20,6 +21,10 @@ export interface ContextStore<C extends ContextData<C>> {
     run<R>(store: Partial<C>, callback: () => Promise<R>): Promise<R>;
 }
 
+/**
+ * Keeps one context for the whole process, so it is only sound for one flow at a time: flows that
+ * overlap read and overwrite the same context.
+ */
 export class ContextStoreUsingMemory<C extends ContextData<C>> implements ContextStore<C> {
     constructor(private context?: Partial<C> | undefined) {
     }
@@ -82,16 +87,31 @@ export class Context<C extends ContextData<C>> implements ContextOperator<C> {
     }
 
     async run<R>(fn: () => Promise<R>, context: Partial<C> = {}): Promise<R> {
-        const inherited = this.context();
+        /**
+         * The defaults seed the inherited side rather than the provided side: a value a parent
+         * scope decided on outranks a default, so a nested run keeps what its parent set instead
+         * of falling back. That matches how slot defaults behave in `composeContextSlots`.
+         */
+        const inherited = {...this.defaults, ...this.context()};
         const merged = this.createContextValue(inherited, context);
         return this.storage.run(merged, fn);
     }
 
+    /**
+     * Writing requires a scope to write into. Outside one there is nothing to attach to —
+     * `AsyncLocalStorage` has no store until `run` creates one — so the values would land in a
+     * throwaway object and vanish. Reading outside a scope stays legal: "nothing here" is an
+     * honest answer, while "stored" would be a lie.
+     */
     attach(context: Partial<C>): void {
-        const store = this.context();
+        const store = this.storage.getStore();
+
+        if (store === undefined) {
+            throw new UnableToAttachContext();
+        }
 
         for (const [key, value] of Object.entries(context)) {
-            (store as any)[key] = value;
+            Object.defineProperty(store, key, {value, writable: true, enumerable: true, configurable: true});
         }
     }
 
@@ -196,6 +216,16 @@ export class UnableToResolveValue extends StandardError {
     }
 }
 
+export class UnableToAttachContext extends StandardError {
+    constructor() {
+        super(
+            'There is no active context scope to attach values to. '
+            + 'Attach from within a run, or prepare context with composeContextSlotsForTesting.',
+            'context.no_active_scope',
+        );
+    }
+}
+
 export function preventMismatch<Value extends string | number>(
     expected: Value,
     actual: Value,
@@ -263,6 +293,9 @@ export type ContextDataFromSlots<Slots extends readonly ContextSlot<string, unkn
  * The slots define the shape of the context and optional default values. After composition,
  * the result is a standard Context that can be used like any other Context.
  *
+ * Without a store, the context is backed by an `AsyncLocalStorage` of its own, so flows that run
+ * concurrently are scoped separately.
+ *
  * @example
  * const tenantSlot = defineContextSlot<'tenant_id', string>({key: 'tenant_id'});
  * const userSlot = defineContextSlot({key: 'user_id', defaultValue: () => 'anonymous'});
@@ -281,7 +314,7 @@ export function composeContextSlots<
     const Slots extends readonly ContextSlot<string, unknown>[],
 >(
     slots: Slots,
-    store: ContextStore<ContextDataFromSlots<Slots>> = new ContextStoreUsingMemory<ContextDataFromSlots<Slots>>(),
+    store: ContextStore<ContextDataFromSlots<Slots>> = new AsyncLocalStorage<Partial<ContextDataFromSlots<Slots>>>(),
 ): Context<ContextDataFromSlots<Slots>> {
     return new Context(store, createContextValueCreator(slots));
 }

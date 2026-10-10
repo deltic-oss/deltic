@@ -1,8 +1,10 @@
-import type {KeyValueStore, ValueType} from './index.js';
+import {type KeyType, type KeyValueStore, SortingKeyNormalisation, type ValueType} from './index.js';
 import {KeyValueStoreUsingMemory} from './memory.js';
 import {createKeyValueSchemaQuery, KeyValueStoreUsingPg} from './pg.js';
+import {objectHashKeyConversion} from './object-hash.js';
 import {Pool} from 'pg';
 import {AsyncPgPool} from '@deltic/async-pg-pool';
+import {ValueReadWriterUsingMemory} from '@deltic/context';
 import {pgTestCredentials} from '../../pg-credentials.js';
 
 type ExampleKey = string | {first: number; second: number};
@@ -62,6 +64,7 @@ describe.each([
         ['boolean', false],
         ['string', 'example'],
         ['object', {name: 'Frank', age: 35}],
+        ['array', [1, 'two', {three: true}, null]],
     ])('stored value of type %s can be retrieved', async (_name, value: ExampleValue) => {
         // arrange
         const key: ExampleKey = 'key-a';
@@ -142,5 +145,364 @@ describe.each([
 
         // assert
         expect(retrievedValue).toBeUndefined();
+    });
+
+    test.each([
+        ['zero', 0],
+        ['an empty string', ''],
+        ['false', false],
+        ['null', null],
+    ])('a stored value of %s is not mistaken for a missing key', async (_name, value: ExampleValue) => {
+        // arrange
+        const key: ExampleKey = 'falsy-value';
+
+        // act
+        await store.persist(key, value);
+
+        // assert
+        expect(await store.retrieve(key)).toStrictEqual(value);
+    });
+
+    test('keys containing sql metacharacters are treated as literal keys', async () => {
+        // arrange
+        const injectionKey = "o'brien'); DROP TABLE not_a_real_table; --";
+
+        // act
+        await store.persist(injectionKey, 'injected');
+        await store.persist('%', 'percent');
+        await store.persist('_', 'underscore');
+        await store.persist('anything', 'literal');
+
+        // assert
+        expect(await store.retrieve(injectionKey)).toBe('injected');
+        expect(await store.retrieve('%')).toBe('percent');
+        expect(await store.retrieve('_')).toBe('underscore');
+    });
+
+    test('removing a key leaves keys that share its prefix intact', async () => {
+        // arrange
+        await store.persist('user', 'plain');
+        await store.persist('user:1', 'scoped');
+        await store.persist('users', 'plural');
+
+        // act
+        await store.remove('user');
+
+        // assert
+        expect(await store.retrieve('user')).toBeUndefined();
+        expect(await store.retrieve('user:1')).toBe('scoped');
+        expect(await store.retrieve('users')).toBe('plural');
+    });
+
+});
+
+describe('KeyValueStoreUsingMemory', () => {
+    let memoryStore: KeyValueStoreUsingMemory<ExampleKey, ExampleValue>;
+
+    beforeEach(() => {
+        memoryStore = new KeyValueStoreUsingMemory<ExampleKey, ExampleValue>();
+    });
+
+    test('object keys are matched regardless of property order', async () => {
+        // arrange
+        await memoryStore.persist({first: 1, second: 2}, 'stored');
+
+        // act
+        const retrieved = await memoryStore.retrieve({second: 2, first: 1} as ExampleKey);
+
+        // assert
+        expect(retrieved).toBe('stored');
+    });
+
+    test('a custom key normalisation decides which keys address the same entry', async () => {
+        const caseInsensitiveStore = new KeyValueStoreUsingMemory<string, ExampleValue>({
+            keyNormalisation: {normalise: key => key.toLowerCase()},
+        });
+
+        await caseInsensitiveStore.persist('Key', 'value');
+
+        expect(await caseInsensitiveStore.retrieve('KEY')).toBe('value');
+    });
+});
+
+describe('SortingKeyNormalisation', () => {
+    const normalisation = new SortingKeyNormalisation<KeyType>();
+
+    test('sorts the properties of an object key and of the objects nested in it', () => {
+        const normalised = normalisation.normalise({second: {d: 4, c: 3}, first: 1});
+
+        expect(JSON.stringify(normalised)).toEqual('{"first":1,"second":{"c":3,"d":4}}');
+    });
+
+    test('leaves arrays as they are', () => {
+        const normalised = normalisation.normalise({list: [{b: 2, a: 1}, 3, 2]});
+
+        expect(JSON.stringify(normalised)).toEqual('{"list":[{"b":2,"a":1},3,2]}');
+    });
+
+    test('leaves anything other than a plain object as it is', () => {
+        const date = new Date('2026-10-06T00:00:00Z');
+
+        expect(normalisation.normalise(date)).toBe(date);
+        expect(normalisation.normalise('key')).toBe('key');
+        expect(normalisation.normalise(null)).toBe(null);
+    });
+});
+
+describe('KeyValueStoreUsingPg', () => {
+    const tableName = 'test__kv_store_variants';
+    let ownPool: Pool;
+    let ownAsyncPool: AsyncPgPool;
+
+    beforeAll(async () => {
+        ownPool = new Pool({...pgTestCredentials, max: 2});
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.query(createKeyValueSchemaQuery(tableName));
+    });
+
+    beforeEach(() => {
+        ownAsyncPool = new AsyncPgPool(ownPool);
+    });
+
+    afterEach(async () => {
+        await ownAsyncPool.flush();
+        await ownPool.query(`TRUNCATE TABLE ${tableName}`);
+    });
+
+    afterAll(async () => {
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.end();
+    });
+
+    describe('keys', () => {
+        test('a custom key normalisation decides which keys address the same entry', async () => {
+            const caseInsensitiveStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyNormalisation: {normalise: key => key.toLowerCase()},
+            });
+
+            await caseInsensitiveStore.persist('Key', 'value');
+
+            expect(await caseInsensitiveStore.retrieve('KEY')).toBe('value');
+        });
+
+        test('a custom key conversion receives the normalised key', async () => {
+            const prefixedStore = new KeyValueStoreUsingPg<{first: number; second: number}, ExampleValue, string>(
+                ownAsyncPool,
+                {
+                    tableName,
+                    keyConversion: key => `prefixed:${JSON.stringify(key)}`,
+                },
+            );
+
+            await prefixedStore.persist({second: 2, first: 1}, 'value');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName}`);
+            expect(rows.map(row => row.key)).toEqual(['prefixed:{"first":1,"second":2}']);
+        });
+
+        test('objectHashKeyConversion stores an object key as a hash of a fixed length', async () => {
+            const hashedStore = new KeyValueStoreUsingPg<{description: string}, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyConversion: objectHashKeyConversion,
+            });
+            const key = {description: 'x'.repeat(300)};
+
+            await hashedStore.persist(key, 'value');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName}`);
+            expect(rows.map(row => row.key.length)).toEqual([128]);
+            expect(await hashedStore.retrieve(key)).toBe('value');
+        });
+
+        test('objectHashKeyConversion stores a scalar key as its string form', async () => {
+            const hashedStore = new KeyValueStoreUsingPg<string | number, ExampleValue>(ownAsyncPool, {
+                tableName,
+                keyConversion: objectHashKeyConversion,
+            });
+
+            await hashedStore.persist('readable-key', 'string');
+            await hashedStore.persist(42, 'number');
+
+            const {rows} = await ownPool.query<{key: string}>(`SELECT "key" FROM ${tableName} ORDER BY "key"`);
+            expect(rows.map(row => row.key)).toEqual(['42', 'readable-key']);
+        });
+    });
+
+    describe('object keys', () => {
+        type ObjectKey = {first: number; second: number};
+        let pgStore: KeyValueStore<ObjectKey, ExampleValue>;
+
+        beforeEach(() => {
+            pgStore = new KeyValueStoreUsingPg<ObjectKey, ExampleValue>(ownAsyncPool, {tableName});
+        });
+
+        test('distinct object keys address distinct values', async () => {
+            await pgStore.persist({first: 1, second: 2}, 'one-two');
+            await pgStore.persist({first: 3, second: 4}, 'three-four');
+
+            expect(await pgStore.retrieve({first: 1, second: 2})).toBe('one-two');
+            expect(await pgStore.retrieve({first: 3, second: 4})).toBe('three-four');
+        });
+
+        test('object keys are matched regardless of property order', async () => {
+            await pgStore.persist({first: 1, second: 2}, 'stored');
+
+            expect(await pgStore.retrieve({second: 2, first: 1})).toBe('stored');
+        });
+
+        test('object keys are removed regardless of property order', async () => {
+            await pgStore.persist({first: 1, second: 2}, 'stored');
+
+            await pgStore.remove({second: 2, first: 1});
+
+            expect(await pgStore.retrieve({first: 1, second: 2})).toBeUndefined();
+        });
+    });
+
+    describe('tenant scoping', () => {
+        const tenantA = '018f8e2a-0000-7000-8000-00000000000a';
+        const tenantB = '018f8e2a-0000-7000-8000-00000000000b';
+        let tenantContext: ValueReadWriterUsingMemory<string>;
+        let tenantStore: KeyValueStore<string, ExampleValue>;
+
+        beforeEach(() => {
+            tenantContext = new ValueReadWriterUsingMemory<string>(tenantA);
+            tenantStore = new KeyValueStoreUsingPg<string, ExampleValue, string, string>(ownAsyncPool, {
+                tableName,
+                tenantContext,
+            });
+        });
+
+        test('persisting requires a resolvable tenant', async () => {
+            tenantContext.forget();
+
+            await expect(tenantStore.persist('key', 'value')).rejects.toThrow();
+        });
+
+        test('the same key holds a separate value per tenant', async () => {
+            await tenantStore.persist('shared-key', 'tenant-a-value');
+            tenantContext.use(tenantB);
+            await tenantStore.persist('shared-key', 'tenant-b-value');
+
+            const {rows} = await ownPool.query<{tenant_id: string}>(
+                `SELECT tenant_id FROM ${tableName} WHERE "key" = 'shared-key' ORDER BY tenant_id`,
+            );
+
+            expect(rows.map(row => row.tenant_id)).toEqual([tenantA, tenantB]);
+        });
+
+        test.each([
+            ['retrieving', (target: KeyValueStore<string, ExampleValue>) => target.retrieve('key')],
+            ['removing', (target: KeyValueStore<string, ExampleValue>) => target.remove('key')],
+            ['clearing', (target: KeyValueStore<string, ExampleValue>) => target.clear()],
+        ])('%s requires a resolvable tenant', async (_name, operation) => {
+            tenantContext.forget();
+
+            await expect(operation(tenantStore)).rejects.toThrow();
+        });
+
+        test('retrieving only returns the value of the current tenant', async () => {
+            await tenantStore.persist('shared-key', 'tenant-a-value');
+
+            tenantContext.use(tenantB);
+
+            expect(await tenantStore.retrieve('shared-key')).toBeUndefined();
+        });
+
+        test('removing only removes the value of the current tenant', async () => {
+            await tenantStore.persist('shared-key', 'tenant-a-value');
+            tenantContext.use(tenantB);
+            await tenantStore.persist('shared-key', 'tenant-b-value');
+
+            await tenantStore.remove('shared-key');
+
+            const {rows} = await ownPool.query<{tenant_id: string}>(
+                `SELECT tenant_id FROM ${tableName} WHERE "key" = 'shared-key'`,
+            );
+            expect(rows.map(row => row.tenant_id)).toEqual([tenantA]);
+        });
+
+        test('clearing only removes the entries of the current tenant', async () => {
+            await tenantStore.persist('key-a', 'tenant-a-value');
+            tenantContext.use(tenantB);
+            await tenantStore.persist('key-b', 'tenant-b-value');
+
+            await tenantStore.clear();
+
+            const {rows} = await ownPool.query<{tenant_id: string}>(`SELECT tenant_id FROM ${tableName}`);
+            expect(rows.map(row => row.tenant_id)).toEqual([tenantA]);
+        });
+    });
+
+    describe('connection handling', () => {
+        let pgStore: KeyValueStore<string, ExampleValue>;
+
+        beforeEach(() => {
+            pgStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {tableName});
+        });
+
+        test.each([
+            ['persist', (target: KeyValueStore<string, ExampleValue>) => target.persist('key', 'value')],
+            ['retrieve', (target: KeyValueStore<string, ExampleValue>) => target.retrieve('key')],
+            ['remove', (target: KeyValueStore<string, ExampleValue>) => target.remove('key')],
+        ])('%s returns the connection it claimed to the pool', async (_name, operation) => {
+            const releaseSpy = vi.spyOn(ownAsyncPool, 'release');
+
+            try {
+                await operation(pgStore);
+
+                expect(releaseSpy).toHaveBeenCalledTimes(1);
+            } finally {
+                releaseSpy.mockRestore();
+            }
+        });
+
+        test('clear returns the connection it claimed to the pool', async () => {
+            const releaseSpy = vi.spyOn(ownAsyncPool, 'release');
+
+            try {
+                await pgStore.clear();
+
+                expect(releaseSpy).toHaveBeenCalledTimes(1);
+            } finally {
+                releaseSpy.mockRestore();
+            }
+        });
+
+    });
+});
+
+describe('KeyValueStoreUsingPg within a transaction', () => {
+    const tableName = 'test__kv_store_transactions';
+    let ownPool: Pool;
+    let ownAsyncPool: AsyncPgPool;
+    let pgStore: KeyValueStore<string, ExampleValue>;
+
+    beforeAll(async () => {
+        ownPool = new Pool({...pgTestCredentials, max: 2});
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.query(createKeyValueSchemaQuery(tableName));
+    });
+
+    beforeEach(() => {
+        ownAsyncPool = new AsyncPgPool(ownPool);
+        pgStore = new KeyValueStoreUsingPg<string, ExampleValue>(ownAsyncPool, {tableName});
+    });
+
+    afterEach(async () => {
+        await ownAsyncPool.flush();
+        await ownPool.query(`TRUNCATE TABLE ${tableName}`);
+    });
+
+    afterAll(async () => {
+        await ownPool.query(`DROP TABLE IF EXISTS ${tableName}`);
+        await ownPool.end();
+    });
+
+    test('a value can be persisted inside an isolated transaction', async () => {
+        await expect(
+            ownAsyncPool.runInIsolatedTransaction(() => pgStore.persist('isolated', 'value')),
+        ).resolves.toBeUndefined();
     });
 });

@@ -212,5 +212,22 @@ describe('InMemoryMessageRepository', () => {
             expect(collected.length).toEqual(5);
             expect(collected).toEqual(ids.slice(2, 7));
         });
+
+        test('an unknown afterId yields nothing rather than starting from the beginning', async () => {
+            const paginated = repository.paginateIds({limit: 5, afterId: 'does-not-exist'});
+
+            expect(await collect(paginated)).toHaveLength(0);
+        });
+
+        /**
+         * A limit that is computed — page size minus what was already handled, for
+         * instance — can end up at zero. That is an empty page, as it is for the Pg
+         * implementation.
+         */
+        test('a limit of zero yields nothing', async () => {
+            const paginated = repository.paginateIds({limit: 0});
+
+            expect(await collect(paginated)).toHaveLength(0);
+        });
     });
 });

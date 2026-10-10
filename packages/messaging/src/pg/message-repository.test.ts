@@ -6,6 +6,7 @@ import {AsyncPgPool} from '@deltic/async-pg-pool';
 import {pgTestCredentials} from '../../../pg-credentials.js';
 import {ValueReadWriterUsingMemory} from '@deltic/context';
 import {collect, messageFactory} from '@deltic/messaging/helpers';
+import type {IdConversion} from '@deltic/uid';
 const firstTenantId = uuid.v7();
 const secondTenantId = uuid.v7();
 const tenantContext = new ValueReadWriterUsingMemory(firstTenantId);
@@ -21,6 +22,17 @@ interface ExampleEventStream {
 const createMessage = messageFactory<ExampleEventStream>();
 const generateId = () => uuid.v7();
 const id = generateId();
+
+/**
+ * Presents an id that is prefixed in the domain ('order_…') to the database without its prefix,
+ * so it fits a UUID column, and puts the prefix back on the way out.
+ */
+function conversionForPrefix(prefix: string): IdConversion<string, string> {
+    return {
+        toDatabase: id => id.substring(prefix.length + 1),
+        fromDatabase: id => `${prefix}_${id}`,
+    };
+}
 
 describe('MessageRepositoryUsingPg', () => {
     let repository: MessageRepositoryUsingPg<ExampleEventStream>;
@@ -196,6 +208,54 @@ describe('MessageRepositoryUsingPg', () => {
         expect(retrievedPayloads[2]).toEqual(thirdMessage.payload);
     });
 
+    /**
+     * Ids that carry a prefix in the domain are stored in UUID columns. Every id the repository
+     * hands to the database has to go through its conversion, or Postgres refuses the prefixed
+     * form — and a conversion that is not 1:1 with the stored form would match the wrong rows.
+     */
+    describe('id conversion', () => {
+        test('the tenant id is stored the way the tenant id conversion presents it', async () => {
+            const tenantId = `tenant_${generateId()}`;
+            const aggregateId = generateId();
+            const convertingRepository = new MessageRepositoryUsingPg<ExampleEventStream>(
+                asyncPool,
+                'test__message_repository_pg',
+                {
+                    tenantContext: new ValueReadWriterUsingMemory(tenantId),
+                    tenantIdConversion: conversionForPrefix('tenant'),
+                },
+            );
+
+            await convertingRepository.persist(aggregateId, [
+                createMessage('first', 'first', {aggregate_root_version: 1}),
+            ]);
+            const retrieved = await collect(convertingRepository.retrieveAllForAggregate(aggregateId));
+            const {rows} = await pgPool.query('SELECT tenant_id FROM test__message_repository_pg');
+
+            expect(retrieved.map(message => message.payload)).toEqual(['first']);
+            expect(rows).toEqual([{tenant_id: tenantId.substring('tenant_'.length)}]);
+        });
+
+        test('pagination converts the id it continues after', async () => {
+            const convertingRepository = new MessageRepositoryUsingPg<ExampleEventStream>(
+                asyncPool,
+                'test__message_repository_pg',
+                {idConversion: conversionForPrefix('order')},
+            );
+            const aggregateIds = Array.from({length: 4}, () => `order_${generateId()}`);
+
+            for (const aggregateId of aggregateIds) {
+                await convertingRepository.persist(aggregateId, [
+                    createMessage('first', 'first', {aggregate_root_version: 1}),
+                ]);
+            }
+
+            const paginated = await collect(convertingRepository.paginateIds({limit: 10, afterId: aggregateIds[1]}));
+
+            expect(paginated.map(page => page.id)).toEqual(aggregateIds.slice(2));
+        });
+    });
+
     describe('id pagination', () => {
         let ids: string[] = [];
         beforeEach(async () => {
@@ -249,6 +309,23 @@ describe('MessageRepositoryUsingPg', () => {
             const highestVersion = Math.max(...messages.map(m => m.message.headers['aggregate_root_version'] ?? 0));
 
             expect(highestVersion).toEqual(1);
+        });
+
+        /**
+         * Retrieval stamps every message with the stream offset it was stored at, and
+         * pagination stamps the same offset on the message it hands out. Consumers use it
+         * to resume a projection from where the pagination left off.
+         */
+        test('paginated messages carry the stream offset they were stored at', async () => {
+            const paginated = await collect(repository.paginateIds({limit: 20}));
+
+            expect(paginated).not.toHaveLength(0);
+            for (const {id, message} of paginated) {
+                const stored = await collect(repository.retrieveAllForAggregate(id));
+
+                expect(message.headers['stream_offset']).toBeDefined();
+                expect(message.headers['stream_offset']).toEqual(stored.at(-1)?.headers['stream_offset']);
+            }
         });
     });
 });

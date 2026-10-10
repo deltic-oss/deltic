@@ -100,4 +100,5 @@ describe('RunMessageConsumerInContext', () => {
 
         await expect(scoping.consume(message)).rejects.toThrow('consumption failed');
     });
+
 });

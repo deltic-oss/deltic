@@ -33,7 +33,9 @@ export function routeSomeToReducer<State, Stream extends StreamDefinition>(
 ): MessageReducer<State, Stream> {
     return async (state, message) => {
         const type = message.type;
-        const reducer = reducers[type];
+        // The type comes off the wire: an own-property lookup keeps a type named after an
+        // Object.prototype member (`toString`, `constructor`) from being called as a reducer.
+        const reducer = Object.hasOwn(reducers, type) ? reducers[type] : undefined;
 
         return reducer === undefined ? state : reducer(state, message);
     };

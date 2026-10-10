@@ -1,11 +1,19 @@
-import objectHash from 'object-hash';
-import type {KeyType, KeyValueStore, ValueType} from './index.js';
+import {type KeyNormalisation, type KeyType, type KeyValueStore, SortingKeyNormalisation, type ValueType} from './index.js';
+
+export interface KeyValueStoreUsingMemoryOptions<Key extends KeyType> {
+    keyNormalisation?: KeyNormalisation<Key>;
+}
 
 export class KeyValueStoreUsingMemory<Key extends KeyType, Value extends ValueType> implements KeyValueStore<
     Key,
     Value
 > {
     private storage: Map<string, Value> = new Map();
+    private readonly keyNormalisation: KeyNormalisation<Key>;
+
+    constructor(options: KeyValueStoreUsingMemoryOptions<Key> = {}) {
+        this.keyNormalisation = options.keyNormalisation ?? new SortingKeyNormalisation<Key>();
+    }
 
     async persist(key: Key, value: Value): Promise<void> {
         this.storage.set(this.resolveKey(key), value);
@@ -19,8 +27,10 @@ export class KeyValueStoreUsingMemory<Key extends KeyType, Value extends ValueTy
         this.storage.delete(this.resolveKey(key));
     }
 
-    resolveKey(key: KeyType): string {
-        return typeof key === 'object' ? objectHash(key, {algorithm: 'sha3-512'}) : String(key);
+    resolveKey(key: Key): string {
+        const normalised = this.keyNormalisation.normalise(key);
+
+        return typeof normalised === 'object' ? JSON.stringify(normalised) : String(normalised);
     }
 
     async clear(): Promise<void> {

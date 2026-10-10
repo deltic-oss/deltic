@@ -44,6 +44,7 @@ export class MessageRepositoryUsingPg<Stream extends StreamDefinition> implement
         readonly options: MessageRepositoryUsingPgOptions<Stream> = {},
     ) {
         this.idConversion = options.idConversion;
+        this.tenantIdConversion = options.tenantIdConversion;
         this.tenantContext = options.tenantContext;
         this.notificationConfiguration = options.notificationConfiguration ?? {style: 'none'};
     }
@@ -195,13 +196,13 @@ export class MessageRepositoryUsingPg<Stream extends StreamDefinition> implement
         let whereClause = '';
 
         if (afterId !== undefined) {
-            values.unshift(afterId);
+            values.unshift(this.idConversion?.toDatabase(afterId) ?? afterId);
             whereClause = 'WHERE aggregate_root_id > $1';
         }
 
         const {rows} = await connection.query<MessageRecord<Stream>>(
             `
-            SELECT DISTINCT ON (aggregate_root_id) aggregate_root_id, payload, version FROM ${this.tableName} ${whereClause}
+            SELECT DISTINCT ON (aggregate_root_id) id, aggregate_root_id, payload, version FROM ${this.tableName} ${whereClause}
             ORDER BY aggregate_root_id, version ${whichMessage === 'last' ? 'DESC' : 'ASC'}
             LIMIT $${values.length}
         `,
