@@ -111,7 +111,7 @@ export class Context<C extends ContextData<C>> implements ContextOperator<C> {
         }
 
         for (const [key, value] of Object.entries(context)) {
-            (store as any)[key] = value;
+            Object.defineProperty(store, key, {value, writable: true, enumerable: true, configurable: true});
         }
     }
 

@@ -125,6 +125,10 @@ await context.run(async () => {
 Reading outside a scope stays legal: `context()` answers `{}`, `get()` answers `undefined` and
 `mustResolve()` throws `UnableToResolveValue`.
 
+`attach()` copies every key of the object it is given as an ordinary value, including a `__proto__`
+key that `JSON.parse` produces. Attach a decoded token or request body by mapping the values you
+expect onto their slots (`context.attach({tenant_id: claims.tenant_id})`) rather than wholesale.
+
 ### Testing
 
 Use `composeContextSlotsForTesting` to create a context pre-initialized with defaults. It is backed

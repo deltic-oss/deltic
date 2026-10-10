@@ -305,6 +305,18 @@ describe.each([
 
         expect(() => context.attach({tenant_id: tenantTwo})).toThrow(UnableToAttachContext);
     });
+
+    test('attaches keys as own properties without replacing the prototype', async () => {
+        await context.run(async () => {
+            // claims decoded from an untrusted token, `__proto__` survives JSON.parse as an own key
+            const claims = JSON.parse('{"name":"attacker","__proto__":{"tenant_id":"other-tenant"}}') as Partial<MyContext>;
+
+            context.attach(claims);
+
+            expect(context.get('tenant_id')).toBeUndefined();
+            expect(Object.getPrototypeOf(context.context())).toBe(Object.prototype);
+        });
+    });
 });
 
 // ============================================================================
