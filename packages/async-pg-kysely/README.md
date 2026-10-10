@@ -289,7 +289,7 @@ new AsyncKyselyConnectionProvider<DB>(pool: AsyncPgPool, options?: {
 
 ### Kysely's Transaction Methods Are Blocked
 
-All `Kysely<DB>` instances created by this provider have Kysely's built-in `db.transaction()` and `db.startTransaction()` overridden to throw `KyselyTransactionsNotSupported`. The driver's `beginTransaction`, `commitTransaction`, and `rollbackTransaction` methods also throw. This prevents Kysely from issuing `BEGIN`/`COMMIT`/`ROLLBACK` on the pool-managed connection, which would corrupt `AsyncPgPool`'s transaction state.
+All `Kysely<DB>` instances created by this provider have Kysely's built-in `db.transaction()` and `db.startTransaction()` overridden to throw `KyselyTransactionsNotSupported`. The drivers' `beginTransaction`, `commitTransaction`, and `rollbackTransaction` methods also throw — for `connection()` and for transaction instances alike — which is what refuses a transaction on an instance derived with `withSchema()`, `withPlugin()`, `withoutPlugins()` or `withTables()`: those build a fresh `Kysely` that does not carry the overridden methods. This prevents Kysely from issuing `BEGIN`/`COMMIT`/`ROLLBACK` on the pool-managed connection, which would corrupt `AsyncPgPool`'s transaction state.
 
 Use the provider's `begin()`/`commit()`/`rollback()` or `runInTransaction()` instead.
 

@@ -483,6 +483,24 @@ describe('AsyncKyselyConnectionProvider — usage scenarios', () => {
             ).rejects.toThrow(KyselyTransactionsNotSupported);
         });
 
+        test('an instance derived from a transaction refuses Kysely transactions', async () => {
+            const trx = await provider.begin();
+            await trx.insertInto('async_kysely_accounts')
+                .values({holder_name: 'outer', balance: 1})
+                .execute();
+
+            await expect(trx.withSchema('public').transaction().execute(async (nested) => {
+                await nested.insertInto('async_kysely_accounts')
+                    .values({holder_name: 'nested', balance: 2})
+                    .execute();
+                throw new Error('nested failure');
+            })).rejects.toThrow(KyselyTransactionsNotSupported);
+
+            await provider.commit(trx);
+
+            const committed = await pool.query('SELECT holder_name FROM async_kysely_accounts ORDER BY holder_name');
+            expect(committed.rows.map((row) => row.holder_name)).toEqual(['outer']);
+        });
     });
 
     // -- Provider lifecycle --

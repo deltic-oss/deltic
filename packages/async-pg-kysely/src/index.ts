@@ -293,9 +293,17 @@ export class AsyncKyselyConnectionProvider<DB> {
             createDriver: () => ({
                 async init(): Promise<void> {},
                 async acquireConnection() { return connectionWrapper; },
-                async beginTransaction(): Promise<void> {},
-                async commitTransaction(): Promise<void> {},
-                async rollbackTransaction(): Promise<void> {},
+                // The backstop for instances derived with `withSchema`, `withPlugin` and the like,
+                // which are built afresh and do not carry the methods `blockTransactions` replaces.
+                async beginTransaction(): Promise<void> {
+                    throw KyselyTransactionsNotSupported.because();
+                },
+                async commitTransaction(): Promise<void> {
+                    throw KyselyTransactionsNotSupported.because();
+                },
+                async rollbackTransaction(): Promise<void> {
+                    throw KyselyTransactionsNotSupported.because();
+                },
                 async releaseConnection(): Promise<void> {},
                 async destroy(): Promise<void> {},
             }),
