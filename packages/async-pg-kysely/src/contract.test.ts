@@ -165,6 +165,51 @@ describe('AsyncKyselyConnectionProvider — usage scenarios', () => {
             }
         });
 
+        it('releaseConnection returns a connection acquired before a transaction began', async () => {
+            const dedicated = new Pool({...pgTestCredentials, max: 2});
+            const driverPool = scopedPool(dedicated, {keepPrimaryConnection: false});
+            const driver = new AsyncPgDriver(driverPool);
+            let idleAfterRelease = -1;
+
+            try {
+                await driverPool.runInIsolation(async () => {
+                    const connection = await driver.acquireConnection();
+                    const transaction = await driverPool.begin();
+
+                    await driver.releaseConnection(connection);
+                    idleAfterRelease = dedicated.idleCount;
+
+                    await driverPool.commit(transaction);
+                });
+
+                expect(idleAfterRelease).toBe(1);
+            } finally {
+                await dedicated.end();
+            }
+        });
+
+        it('releaseConnection leaves the transaction connection to the transaction that ended meanwhile', async () => {
+            const dedicated = new Pool({...pgTestCredentials, max: 2});
+            const driverPool = scopedPool(dedicated, {keepPrimaryConnection: false});
+            const driver = new AsyncPgDriver(driverPool);
+
+            try {
+                await driverPool.runInIsolation(async () => {
+                    const transaction = await driverPool.begin();
+                    const connection = await driver.acquireConnection();
+
+                    // the transaction is finalised by another part of the flow while the query runs
+                    await driverPool.commit(transaction);
+
+                    await expect(driver.releaseConnection(connection)).resolves.toBeUndefined();
+                });
+
+                expect(dedicated.idleCount).toBe(dedicated.totalCount);
+            } finally {
+                await dedicated.end();
+            }
+        });
+
         test('the transaction methods refuse to run', async () => {
             const driver = new AsyncPgDriver(asyncPool);
             const connection = await driver.acquireConnection();
