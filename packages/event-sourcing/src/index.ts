@@ -9,6 +9,7 @@ import type {
     StreamDefinition,
 } from '@deltic/messaging';
 import {type Clock, GlobalClock} from '@deltic/clock';
+import {StandardError} from '@deltic/error-standard';
 import type {TransactionManager} from '@deltic/transaction-manager';
 
 export interface AggregateStream<Stream extends AggregateStream<Stream>> extends StreamDefinition {
@@ -53,7 +54,14 @@ export class EventSourcedAggregateRepository<
         return this.factory.reconstituteFromEvents(id, this.messageRepository.retrieveAllForAggregate(id));
     }
 
+    /**
+     * Version 0 is the aggregate before its first event.
+     */
     async retrieveAtVersion(id: Stream['aggregateRootId'], version: number): Promise<Stream['aggregateRoot']> {
+        if (!Number.isSafeInteger(version) || version < 0) {
+            throw InvalidAggregateRootVersion.forVersion(id, version);
+        }
+
         return this.factory.reconstituteFromEvents(id, this.messageRepository.retrieveAllUntilVersion(id, version + 1));
     }
 
@@ -85,6 +93,15 @@ export class EventSourcedAggregateRepository<
             await this.transactionManager.commit();
         }
     }
+}
+
+export class InvalidAggregateRootVersion extends StandardError {
+    static forVersion = (id: string | number, version: number) =>
+        new InvalidAggregateRootVersion(
+            `Unable to retrieve aggregate ${id} at version ${version}: a version is a whole number of zero or more.`,
+            'event_sourcing.invalid_aggregate_root_version',
+            {aggregateRootId: id, version: String(version)},
+        );
 }
 
 export type AggregateRootOptions = {

@@ -138,7 +138,7 @@ const repository = new EventSourcedAggregateRepository<OrderStream>(
 
 // Retrieve
 const order = await repository.retrieve(orderId);
-const orderAtV3 = await repository.retrieveAtVersion(orderId, 3);
+const orderAtV3 = await repository.retrieveAtVersion(orderId, 3); // a whole number from 0, the aggregate before its first event
 
 // Persist
 const order = Order.place('order-1', 99.99);
