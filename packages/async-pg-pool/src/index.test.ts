@@ -7,6 +7,7 @@ import {
     type AsyncPgPoolOptions,
     type Connection,
     TransactionManagerUsingPg,
+    UnableToUseConnection,
 } from './index.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {randomUUID} from 'node:crypto';
@@ -70,6 +71,16 @@ function abandonConnection(connection: Connection | unknown): void {
     } catch {
         // a client that is already gone needs no cleanup
     }
+}
+
+/**
+ * Identifies the server session behind a connection, so a test can tell whether two connections
+ * are the same physical one.
+ */
+async function backendOf(connection: Connection): Promise<number> {
+    const result = await connection.query<{pid: number}>('SELECT pg_backend_pid() AS pid');
+
+    return result.rows[0].pid;
 }
 
 const stillPending = Symbol('still pending');
@@ -481,7 +492,7 @@ describe('AsyncPgPool', () => {
 
     test('being able to set a setting for a connection', async () => {
         let index = 0;
-        let usedConnection: Connection | undefined = undefined;
+        let usedBackend: number | undefined = undefined;
         const provider = new AsyncPgPool(pool, {
             keepConnections: 0,
             onRelease: 'RESET app.tenant_id',
@@ -491,7 +502,7 @@ describe('AsyncPgPool', () => {
         async function fetchTenantId() {
             await using connection = await provider.claim();
             const result = await connection.query("SELECT current_setting('app.tenant_id') as num");
-            usedConnection = connection;
+            usedBackend = await backendOf(connection);
 
             return Number(result.rows[0].num);
         }
@@ -501,12 +512,18 @@ describe('AsyncPgPool', () => {
 
         // Verify the tenant ID does not leak when the connection is
         const connection = await pool.connect();
-        // Strict equal check to ensure the connection was the same as used before.
-        expect(usedConnection).toStrictEqual(connection);
-        const result = await connection.query("SELECT current_setting('app.tenant_id') as num");
-        connection.release();
 
-        expect(result.rows[0].num).toEqual('');
+        try {
+            // Ensure the connection is the same session as used before: the pool hands out the
+            // connection that was released last.
+            const backend = await connection.query<{pid: number}>('SELECT pg_backend_pid() AS pid');
+            expect(backend.rows[0].pid).toEqual(usedBackend);
+
+            const result = await connection.query("SELECT current_setting('app.tenant_id') as num");
+            expect(result.rows[0].num).toEqual('');
+        } finally {
+            connection.release();
+        }
     });
 
     test('using async dispose to close a connection', async () => {
@@ -920,6 +937,151 @@ describe('AsyncPgPool', () => {
         });
     });
 
+    /**
+     * The pool gives out a handle per claim and per transaction rather than the driver's client,
+     * because the driver hands that same client to the next caller once it is back in its pool.
+     * A reference kept past the end of what it stood for must not reach whoever has it by then.
+     */
+    describe('connections that are no longer the caller\'s to use', () => {
+        test('a released connection refuses queries after the driver handed it to another caller', databaseTest, async () => {
+            const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+
+            try {
+                await inScope({}, async scoped => {
+                    const released = await scoped.claim();
+                    const releasedBackend = await backendOf(released);
+                    await scoped.release(released);
+
+                    // the pool has a single connection, so this is the same session
+                    const current = await scoped.claim();
+
+                    expect(await backendOf(current)).toEqual(releasedBackend);
+                    await expect(released.query('SELECT 1')).rejects.toThrow(UnableToUseConnection);
+                    await expect(current.query('SELECT 1')).resolves.toBeDefined();
+
+                    await scoped.release(current);
+                }, dedicated);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('a transaction on the primary connection ends for whoever kept it, while the primary connection stays usable', databaseTest, async () => {
+            const identifier = randomUUID();
+
+            await inScope({}, async scoped => {
+                const primary = await scoped.primary();
+                const transaction = await scoped.begin();
+                await scoped.commit(transaction);
+
+                await expect(transaction.query(insertLedgerEntry, [identifier, 'outside of the transaction']))
+                    .rejects.toThrow('the transaction it belongs to was already committed or rolled back');
+                await expect(primary.query('SELECT 1')).resolves.toBeDefined();
+            });
+
+            expect((await pool.query(selectLedgerEntry, [identifier])).rows).toEqual([]);
+        });
+
+        test('a transaction rolled back by abandoning its scope ends for the handler still holding it', databaseTest, async () => {
+            const dedicated = dedicatedPool({max: 2, connectionTimeoutMillis: 2000});
+            const context = asyncScopedContext();
+            const scoped = new AsyncPgPool(dedicated, {}, context);
+            const identifier = randomUUID();
+
+            try {
+                await context.run(async () => {
+                    const transaction = await scoped.begin();
+                    const claimed = await scoped.claim();
+
+                    await scoped.abandon({rollbackOpenTransaction: true});
+
+                    // the handler runs on after the deadline: none of its writes may land
+                    await expect(transaction.query(insertLedgerEntry, [identifier, 'after the deadline']))
+                        .rejects.toThrow(UnableToUseConnection);
+                    await expect(claimed.query(insertLedgerEntry, [identifier, 'after the deadline']))
+                        .rejects.toThrow(UnableToUseConnection);
+                });
+
+                expect((await pool.query(selectLedgerEntry, [identifier])).rows).toEqual([]);
+            } finally {
+                await outcomeWithin(dedicated.end(), 2000);
+            }
+        });
+
+        test('a connection kept idle for the context refuses queries from whoever released it', databaseTest, async () => {
+            await inScope({keepConnections: 1, maxIdleMs: 5000}, async scoped => {
+                const released = await scoped.claim();
+                const releasedBackend = await backendOf(released);
+                await scoped.release(released);
+
+                const reclaimed = await scoped.claim();
+
+                expect(await backendOf(reclaimed)).toEqual(releasedBackend);
+                await expect(released.query('SELECT 1')).rejects.toThrow(UnableToUseConnection);
+                await expect(scoped.release(released)).rejects.toThrow('it was already released');
+
+                await scoped.release(reclaimed);
+            });
+        });
+
+        test('a refused query is reported to a callback, the way the driver reports a failing query', databaseTest, async () => {
+            await inScope({}, async scoped => {
+                const released = await scoped.claim();
+                await scoped.release(released);
+                const reported = Promise.withResolvers<unknown>();
+
+                const returned = released.query('SELECT 1', (error: Error) => reported.resolve(error));
+
+                expect(returned).toBeUndefined();
+                expect(await reported.promise).toBeInstanceOf(UnableToUseConnection);
+            });
+        });
+
+        test('everything other than querying still reaches the connection', databaseTest, async () => {
+            await inScope({}, async scoped => {
+                const connection = await scoped.claim();
+                const notified = Promise.withResolvers<string>();
+                const channel = `async_pool_${randomUUID().replace(/-/g, '')}`;
+
+                connection.on('notification', message => notified.resolve(message.channel));
+                await connection.query(`LISTEN ${channel}`);
+                await pool.query(`NOTIFY ${channel}`);
+
+                expect(await notified.promise).toEqual(channel);
+                expect(connection.escapeIdentifier('a"b')).toEqual('"a""b"');
+
+                await connection.query(`UNLISTEN ${channel}`);
+                connection.removeAllListeners('notification');
+                await scoped.release(connection);
+            });
+        });
+
+        test('a claim hook that wraps the connection\'s query keeps seeing every query', databaseTest, async () => {
+            const seen: unknown[] = [];
+            const instrumentQueries: AsyncPgPoolOptions = {
+                onClaim: (client: Connection) => {
+                    const query = client.query.bind(client) as (text: unknown, values?: unknown) => Promise<unknown>;
+
+                    Object.assign(client, {
+                        query: (text: unknown, values?: unknown) => {
+                            seen.push(text);
+
+                            return query(text, values);
+                        },
+                    });
+                },
+            };
+
+            await inScope(instrumentQueries, async scoped => {
+                const connection = await scoped.claim();
+                await connection.query('SELECT 1');
+                await scoped.release(connection);
+            });
+
+            expect(seen).toEqual(['SELECT 1']);
+        });
+    });
+
     describe('transactions that do not go to plan', () => {
         test('reports a failure when the server discards an aborted transaction on commit', databaseTest, async () => {
             const identifier = randomUUID();
@@ -1131,6 +1293,27 @@ describe('AsyncPgPool', () => {
 
                 expect((failure as {code?: string}).code).toEqual('23505');
             });
+        });
+
+        test('refuses to run queries on a transaction connection that was committed', databaseTest, async () => {
+            const dedicated = dedicatedPool({connectionTimeoutMillis: 2000});
+            const identifier = randomUUID();
+
+            try {
+                await inScope({}, async scoped => {
+                    const transaction = await scoped.begin();
+                    await scoped.commit(transaction);
+
+                    // a module that kept the connection around must not be able to write
+                    // through it: the write would land outside of any transaction, or in
+                    // the transaction of whichever flow holds the connection by then
+                    await expect(transaction.query(insertLedgerEntry, [identifier, 'after the commit']))
+                        .rejects.toThrow(UnableToUseConnection);
+                }, dedicated);
+            } finally {
+                await pool.query(`DELETE FROM ${ledgerTable} WHERE identifier = $1`, [identifier]);
+                await outcomeWithin(dedicated.end(), 2000);
+            }
         });
 
         test('surfaces the failure of the release hook after committing', databaseTest, async () => {
