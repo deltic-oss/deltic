@@ -153,7 +153,7 @@ describe('MultiAggregateProjector', () => {
         expect(second.projected).toHaveLength(1);
     });
 
-    test('propagates the failure of a single projector', async () => {
+    test('stops at the first projector that fails', async () => {
         const failing = new OrderProjector(new Error('the read model is unavailable'));
         const succeeding = new OrderProjector();
         const projector = new MultiAggregateProjector<OrderStream>([failing, succeeding]);
@@ -162,7 +162,7 @@ describe('MultiAggregateProjector', () => {
             'the read model is unavailable',
         );
 
-        expect(succeeding.projected).toHaveLength(1);
+        expect(succeeding.projected).toHaveLength(0);
     });
 
     test('reports the first failure when several projectors fail', async () => {
