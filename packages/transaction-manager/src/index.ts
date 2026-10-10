@@ -19,15 +19,17 @@ export class NoopTransactionManager implements TransactionManager {
 
     async commit(): Promise<void> {}
 
-    runInTransaction<R>(fn: () => Promise<R>): Promise<R> {
+    // `async` reports a unit of work that throws before it returns a promise as a rejection,
+    // the way the managers this one stands in for do.
+    async runInTransaction<R>(fn: () => Promise<R>): Promise<R> {
         return fn();
     }
 
-    runInIsolation<R>(fn: () => Promise<R>): Promise<R> {
+    async runInIsolation<R>(fn: () => Promise<R>): Promise<R> {
         return fn();
     }
 
-    runInIsolatedTransaction<R>(fn: () => Promise<R>): Promise<R> {
+    async runInIsolatedTransaction<R>(fn: () => Promise<R>): Promise<R> {
         return fn();
     }
 }
