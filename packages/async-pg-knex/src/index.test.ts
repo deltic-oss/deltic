@@ -1341,6 +1341,54 @@ describe('AsyncKnexConnectionProvider', () => {
         });
     });
 
+    describe('schema builder', () => {
+        const schemaTable = 'async_knex_schema_builder';
+
+        afterEach(async () => {
+            await pool.query(`DROP TABLE IF EXISTS ${schemaTable}`);
+        });
+
+        const tableExists = async (): Promise<boolean> => {
+            const result = await pool.query(`SELECT to_regclass('${schemaTable}') IS NOT NULL AS present`);
+
+            return result.rows[0].present;
+        };
+
+        test('runs schema statements on the ambient connection', async () => {
+            await provider.connection().schema.createTable(schemaTable, table => {
+                table.increments('id');
+            });
+
+            expect(await tableExists()).toBe(true);
+        });
+
+        test('schema statements inside runInTransaction roll back with the transaction', async () => {
+            await expect(provider.runInTransaction(async () => {
+                await provider.connection().schema.createTable(schemaTable, table => {
+                    table.increments('id');
+                });
+
+                throw new Error('the migration failed');
+            })).rejects.toThrow('the migration failed');
+
+            expect(await tableExists()).toBe(false);
+        });
+
+        test('schema statements on a transaction run inside it', async () => {
+            const trx = await provider.begin();
+            await trx.schema.createTable(schemaTable, table => {
+                table.increments('id');
+            });
+
+            expect(await trx.schema.hasTable(schemaTable)).toBe(true);
+            expect(await tableExists()).toBe(false);
+
+            await provider.rollback(trx);
+
+            expect(await tableExists()).toBe(false);
+        });
+    });
+
     describe('promise interface of a lazy query', () => {
         test('catch() reports the query failure', async () => {
             const caught = await provider

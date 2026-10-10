@@ -52,6 +52,11 @@ export function createTransactionWrapper(knex: Knex, pgConnection: PgConnection)
                 return pgConnection;
             }
 
+            // Schema statements run inside the transaction, like every other query from here.
+            if (prop === 'schema') {
+                return knex.schema.connection(pgConnection as any);
+            }
+
             // For raw queries
             if (prop === 'raw') {
                 return (sql: string, bindings?: Knex.RawBinding | Knex.RawBinding[]) => {
