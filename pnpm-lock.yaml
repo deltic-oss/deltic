@@ -97,6 +97,9 @@ importers:
       '@deltic/async-pg-pool':
         specifier: workspace:^
         version: link:../async-pg-pool
+      '@deltic/error-standard':
+        specifier: workspace:^
+        version: link:../error-standard
       knex:
         specifier: ^3.2.9
         version: 3.2.9(pg@8.20.0)

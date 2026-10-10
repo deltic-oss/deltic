@@ -25,6 +25,7 @@
   "packageManager": "pnpm@10.12.4",
   "dependencies": {
     "@deltic/async-pg-pool": "workspace:^",
+    "@deltic/error-standard": "workspace:^",
     "knex": "^3.2.9"
   },
   "peerDependencies": {
