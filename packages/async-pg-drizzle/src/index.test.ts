@@ -1,6 +1,16 @@
 import {Pool} from 'pg';
-import {AsyncPgPool, asyncPoolContext, type AsyncPoolContext} from '@deltic/async-pg-pool';
-import {AsyncDrizzleConnectionProvider, DrizzleTransactionsNotSupported, pgConnectionSymbol} from './index.js';
+import {
+    AsyncPgPool,
+    asyncPoolContext,
+    type AsyncPgPoolOptions,
+    type AsyncPoolContext,
+} from '@deltic/async-pg-pool';
+import {
+    AsyncDrizzleConnectionProvider,
+    DrizzleTransactionsNotSupported,
+    extractPgConnection,
+    pgConnectionSymbol,
+} from './index.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {pgTestCredentials} from '../../pg-credentials.js';
 import {pgTable, serial, text, integer, boolean, timestamp} from 'drizzle-orm/pg-core';
@@ -26,12 +36,90 @@ const postsTable = pgTable('async_drizzle_posts', {
     createdAt: timestamp('created_at').defaultNow(),
 });
 
+/**
+ * Same table as usersTable, but with implicit column names so the `casing`
+ * option decides how the property names are translated to columns.
+ */
+const implicitNamesTable = pgTable('async_drizzle_test', {
+    id: serial(),
+    name: text(),
+    createdAt: timestamp(),
+});
+
 // -- Test setup --
 
 const asyncLocalStorage = new AsyncLocalStorage<AsyncPoolContext>();
 const setupContext = (): void => {
     asyncLocalStorage.enterWith(asyncPoolContext());
 };
+
+interface DedicatedStack {
+    pgPool: Pool;
+    asyncPool: AsyncPgPool;
+    provider: AsyncDrizzleConnectionProvider;
+}
+
+/**
+ * Builds a provider on top of a pool that is not shared with any other test,
+ * so pool capacity and connection lifecycle can be reasoned about without
+ * looking at global database state.
+ */
+const withDedicatedStack = async <R>(
+    setup: {connections: number; options?: AsyncPgPoolOptions},
+    use: (stack: DedicatedStack) => Promise<R>,
+): Promise<R> => {
+    const pgPool = new Pool({
+        ...pgTestCredentials,
+        max: setup.connections,
+        connectionTimeoutMillis: 1000,
+    });
+    const asyncPool = new AsyncPgPool(pgPool, {keepConnections: 0, ...setup.options});
+    const provider = new AsyncDrizzleConnectionProvider(asyncPool);
+
+    try {
+        return await use({pgPool, asyncPool, provider});
+    } finally {
+        // Best effort: a leaked transaction lock makes flush() — and with it the
+        // shutdown of a pool that still has a connection checked out — block forever.
+        await settlesWithin(asyncPool.flush(), 500);
+        await settlesWithin(pgPool.end(), 1500);
+    }
+};
+
+/**
+ * Resolves to 'settled' or 'timed out' without ever leaving the promise
+ * unhandled, so a deadlock surfaces as a failed assertion instead of a hang.
+ */
+const settlesWithin = async (promise: Promise<unknown>, milliseconds: number): Promise<'settled' | 'timed out'> => {
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
+    const expiry = new Promise<'timed out'>(resolve => {
+        timer = setTimeout(() => resolve('timed out'), milliseconds);
+    });
+
+    try {
+        return await Promise.race([
+            promise.then(() => 'settled' as const, () => 'settled' as const),
+            expiry,
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+const rejectionOf = async (promise: Promise<unknown>): Promise<Error> => {
+    try {
+        await promise;
+    } catch (error) {
+        return error as Error;
+    }
+
+    throw new Error('Expected the promise to reject, but it resolved');
+};
+
+/**
+ * Drizzle wraps driver errors in a DrizzleQueryError, the driver error is the cause.
+ */
+const causeOf = (error: Error): Error & {code?: string} => error.cause as Error & {code?: string};
 
 describe('AsyncDrizzleConnectionProvider', () => {
     let pool: Pool;
@@ -559,6 +647,278 @@ describe('AsyncDrizzleConnectionProvider', () => {
             expect(result).toHaveLength(1);
             expect(result[0].name).toBe('Frank');
             expect(result[0].age).toBe(35);
+        });
+    });
+
+    // -- The reason this package exists: queries run on the connection the ambient context claimed --
+
+    describe('ambient connection routing', () => {
+        test('a lazy write is visible to a raw query on the claimed transaction connection', async () => {
+            await asyncPool.runInTransaction(async () => {
+                await provider.connection().insert(usersTable).values({name: 'Frank'});
+
+                const onTheClaimedConnection = await asyncPool.withTransaction()
+                    .query('SELECT name FROM async_drizzle_test');
+                expect(onTheClaimedConnection.rows).toEqual([{name: 'Frank'}]);
+
+                const onAnotherConnection = await pool.query('SELECT name FROM async_drizzle_test');
+                expect(onAnotherConnection.rows).toEqual([]);
+            });
+
+            const afterCommit = await pool.query('SELECT name FROM async_drizzle_test');
+            expect(afterCommit.rows).toEqual([{name: 'Frank'}]);
+        });
+
+        test('lazy and transaction-bound writes end up in the same transaction', async () => {
+            const trx = await provider.begin();
+
+            await trx.insert(usersTable).values({name: 'bound'});
+            await provider.connection().insert(usersTable).values({name: 'lazy'});
+
+            const insideTheTransaction = await trx.select().from(usersTable).orderBy(usersTable.name);
+            expect(insideTheTransaction.map(row => row.name)).toEqual(['bound', 'lazy']);
+
+            await provider.rollback(trx);
+
+            const afterRollback = await pool.query('SELECT name FROM async_drizzle_test');
+            expect(afterRollback.rows).toEqual([]);
+        });
+
+        test('the transaction connection is retained across lazy queries', async () => {
+            await expect(asyncPool.runInTransaction(async () => {
+                const claimed = asyncPool.withTransaction();
+
+                for (let index = 0; index < 5; index++) {
+                    await provider.connection().insert(usersTable).values({name: `row-${index}`});
+                }
+
+                expect(asyncPool.withTransaction()).toBe(claimed);
+                expect(provider.inTransaction()).toBe(true);
+
+                throw new Error('discard everything');
+            })).rejects.toThrow('discard everything');
+
+            const rows = await pool.query('SELECT name FROM async_drizzle_test');
+            expect(rows.rows).toEqual([]);
+        });
+
+        test('the relational query API resolves through the transaction connection', async () => {
+            const typedProvider = new AsyncDrizzleConnectionProvider(asyncPool, {schema: {usersTable, postsTable}});
+
+            await expect(asyncPool.runInTransaction(async () => {
+                await typedProvider.connection().insert(usersTable).values({name: 'Frank'});
+
+                const found = await typedProvider.connection().query.usersTable.findMany();
+                expect(found.map(user => user.name)).toEqual(['Frank']);
+
+                const onAnotherConnection = await pool.query('SELECT name FROM async_drizzle_test');
+                expect(onAnotherConnection.rows).toEqual([]);
+
+                throw new Error('discard everything');
+            })).rejects.toThrow('discard everything');
+        });
+
+    });
+
+    // -- Async context scoping --
+
+    // -- Transaction failure semantics --
+
+    describe('transaction failure semantics', () => {
+        test('the error thrown inside runInTransaction propagates unchanged', async () => {
+            const failure = new Error('domain failure');
+
+            const caught = await rejectionOf(provider.runInTransaction(async () => {
+                await provider.connection().insert(usersTable).values({name: 'Frank'});
+
+                throw failure;
+            }));
+
+            expect(caught).toBe(failure);
+            expect((await pool.query('SELECT name FROM async_drizzle_test')).rows).toEqual([]);
+        });
+
+        test('a constraint violation rolls the whole transaction back', async () => {
+            const caught = await rejectionOf(provider.runInTransaction(async () => {
+                await provider.connection().insert(usersTable).values({name: 'first', email: 'clash@example.com'});
+                await provider.connection().insert(usersTable).values({name: 'second', email: 'clash@example.com'});
+            }));
+
+            expect(causeOf(caught).code).toBe('23505');
+            expect((await pool.query('SELECT name FROM async_drizzle_test')).rows).toEqual([]);
+        });
+
+    });
+
+    // -- Nesting --
+
+    describe('nested transactions', () => {
+        test('nested runInTransaction commits once, at the outermost boundary', async () => {
+            await provider.runInTransaction(async () => {
+                await provider.connection().insert(usersTable).values({name: 'outer'});
+
+                await provider.runInTransaction(async () => {
+                    await provider.connection().insert(usersTable).values({name: 'inner'});
+                });
+
+                expect((await pool.query('SELECT name FROM async_drizzle_test')).rows).toEqual([]);
+                expect(provider.inTransaction()).toBe(true);
+            });
+
+            const rows = await pool.query('SELECT name FROM async_drizzle_test ORDER BY name');
+            expect(rows.rows).toEqual([{name: 'inner'}, {name: 'outer'}]);
+        });
+
+        test('a failure inside a nested runInTransaction rolls the outer transaction back', async () => {
+            await expect(provider.runInTransaction(async () => {
+                await provider.connection().insert(usersTable).values({name: 'outer'});
+
+                await provider.runInTransaction(async () => {
+                    await provider.connection().insert(usersTable).values({name: 'inner'});
+
+                    throw new Error('inner failure');
+                });
+            })).rejects.toThrow('inner failure');
+
+            expect((await pool.query('SELECT name FROM async_drizzle_test')).rows).toEqual([]);
+        });
+
+        test('a nested failure that the caller swallows keeps the inner writes, there are no savepoints', async () => {
+            await provider.runInTransaction(async () => {
+                await provider.connection().insert(usersTable).values({name: 'outer'});
+
+                await rejectionOf(provider.runInTransaction(async () => {
+                    await provider.connection().insert(usersTable).values({name: 'inner'});
+
+                    throw new Error('inner failure');
+                }));
+            });
+
+            const rows = await pool.query('SELECT name FROM async_drizzle_test ORDER BY name');
+            expect(rows.rows).toEqual([{name: 'inner'}, {name: 'outer'}]);
+        });
+
+    });
+
+    // -- Connection release --
+
+    describe('connection release', () => {
+        test('failing queries do not exhaust the pool', async () => {
+            await withDedicatedStack({
+                connections: 2,
+                options: {keepPrimaryConnection: false},
+            }, async ({provider}) => {
+                await provider.connection().insert(usersTable).values({name: 'seed', email: 'clash@example.com'});
+
+                for (let attempt = 0; attempt < 6; attempt++) {
+                    const violation = await rejectionOf(
+                        provider.connection().insert(usersTable).values({name: 'dup', email: 'clash@example.com'}),
+                    );
+                    expect(causeOf(violation).code).toBe('23505');
+
+                    const unknownColumn = await rejectionOf(
+                        provider.connection().execute(sql`SELECT no_such_column FROM async_drizzle_test`),
+                    );
+                    expect(causeOf(unknownColumn).code).toBe('42703');
+
+                    const typeMismatch = await rejectionOf(
+                        provider.connection().execute(
+                            sql`SELECT * FROM async_drizzle_test WHERE age = ${'not-a-number'}`,
+                        ),
+                    );
+                    expect(causeOf(typeMismatch).code).toBe('22P02');
+                }
+
+                // Would reject with a connection timeout if any of the 18 failures leaked.
+                expect(await provider.connection().select().from(usersTable)).toHaveLength(1);
+            });
+        });
+
+    });
+
+    // -- Lifecycle --
+
+    describe('lifecycle', () => {
+
+        test('committing an instance that is not a transaction is rejected', async () => {
+            await expect(provider.commit(provider.connection())).rejects.toThrow('missing pg connection');
+            await expect(provider.rollback(provider.connection())).rejects.toThrow('missing pg connection');
+        });
+
+    });
+
+    // -- Security --
+
+    describe('security', () => {
+        test('values containing SQL are bound as parameters, never interpolated', async () => {
+            const hostileName = "Robert'); DROP TABLE async_drizzle_posts; --";
+
+            await provider.connection().insert(usersTable).values({name: hostileName});
+
+            const found = await provider.connection()
+                .select()
+                .from(usersTable)
+                .where(eq(usersTable.name, hostileName));
+
+            expect(found).toHaveLength(1);
+            expect(found[0].name).toBe(hostileName);
+            expect(await provider.connection().select().from(postsTable)).toEqual([]);
+        });
+    });
+
+    // -- Provider options --
+
+    describe('provider options', () => {
+        test('snake_case casing maps camelCase properties onto snake_case columns', async () => {
+            const snakeCased = new AsyncDrizzleConnectionProvider(asyncPool, {casing: 'snake_case'});
+
+            await snakeCased.connection().insert(implicitNamesTable).values({name: 'Frank'});
+
+            const rows = await snakeCased.connection()
+                .select({name: implicitNamesTable.name, createdAt: implicitNamesTable.createdAt})
+                .from(implicitNamesTable);
+
+            expect(rows[0].name).toBe('Frank');
+            expect(rows[0].createdAt).toBeInstanceOf(Date);
+
+            // Without the option the property name is used verbatim and no such column exists.
+            const error = await rejectionOf(provider.connection()
+                .select({createdAt: implicitNamesTable.createdAt})
+                .from(implicitNamesTable));
+            expect(causeOf(error).message).toContain('createdAt');
+        });
+
+        test('the logger receives each statement with its parameters', async () => {
+            const logged: Array<{query: string; params: unknown[]}> = [];
+            const logging = new AsyncDrizzleConnectionProvider(asyncPool, {
+                logger: {logQuery: (query, params) => logged.push({query, params})},
+            });
+
+            await logging.connection().insert(usersTable).values({name: 'Frank', age: 35});
+
+            expect(logged).toHaveLength(1);
+            expect(logged[0].query).toContain('insert into "async_drizzle_test"');
+            expect(logged[0].params).toEqual(['Frank', 35]);
+        });
+
+        test('extractPgConnection exposes the connection bound to a transaction instance', async () => {
+            const trx = await provider.begin();
+
+            expect(extractPgConnection(trx)).toBe(asyncPool.withTransaction());
+
+            await provider.rollback(trx);
+
+            expect(() => extractPgConnection(provider.connection())).toThrow('missing pg connection');
+        });
+
+        test('withTransaction instances block drizzle transactions too', async () => {
+            const trx = await provider.begin();
+
+            expect(() => provider.withTransaction().transaction(async () => {})).toThrow(
+                DrizzleTransactionsNotSupported,
+            );
+
+            await provider.rollback(trx);
         });
     });
 });
