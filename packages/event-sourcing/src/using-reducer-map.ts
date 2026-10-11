@@ -28,7 +28,7 @@ export abstract class AggregateRootUsingReducerMap<
     }
 
     protected apply(message: AnyMessageFrom<Stream>): void {
-        const handler = this.handlers[message.type];
+        const handler = Object.hasOwn(this.handlers, message.type) ? this.handlers[message.type] : undefined;
         this.aggregateRootVersionNumber = Number(message.headers['aggregate_root_version'] || 1);
 
         if (handler) {
