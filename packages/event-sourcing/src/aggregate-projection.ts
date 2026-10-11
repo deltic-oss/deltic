@@ -26,7 +26,7 @@ export class AggregateRepositoryWithProjector<
             await this.repository.persist(aggregateRoot);
         } catch (e) {
             if (!alreadyInTransaction) {
-                await this.transactionManager.rollback();
+                await this.transactionManager.rollback(e);
             }
             throw e;
         }

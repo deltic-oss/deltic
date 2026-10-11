@@ -14,6 +14,7 @@ import type {TransactionManager} from '@deltic/transaction-manager';
  */
 export class RecordingTransactionManager implements TransactionManager {
     readonly calls: string[] = [];
+    readonly rollbackCauses: unknown[] = [];
     private active: boolean;
 
     constructor(startedInTransaction: boolean = false) {
@@ -30,8 +31,9 @@ export class RecordingTransactionManager implements TransactionManager {
         this.active = false;
     }
 
-    async rollback(): Promise<void> {
+    async rollback(error?: unknown): Promise<void> {
         this.calls.push('rollback');
+        this.rollbackCauses.push(error);
         this.active = false;
     }
 

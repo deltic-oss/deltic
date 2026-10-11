@@ -100,6 +100,17 @@ describe('EventSourcedAggregateRepository', () => {
             expect(transactions.calls).toEqual(['begin', 'rollback']);
         });
 
+        test('tells the transaction manager why it is rolling back', async () => {
+            const repository = createRepository();
+            const order = Order.place(orderId, 'frank', 100);
+            const failure = new Error('connection reset by peer');
+            messages.failNextWrite(failure);
+
+            await expect(repository.persist(order)).rejects.toThrow(failure);
+
+            expect(transactions.rollbackCauses).toEqual([failure]);
+        });
+
         test('does not roll back a transaction owned by the caller', async () => {
             const callerTransaction = new RecordingTransactionManager(true);
             const repository = createRepository({transactions: callerTransaction});
