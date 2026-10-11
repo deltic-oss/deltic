@@ -7,7 +7,7 @@ import {MessageRepositoryUsingMemory} from '@deltic/messaging/message-repository
 import {MessageRepositoryUsingPg} from '@deltic/messaging/pg/message-repository';
 import {NoopTransactionManager} from '@deltic/transaction-manager';
 import {pgTestCredentials} from '../../pg-credentials.js';
-import {EventSourcedAggregateRepository} from './index.js';
+import {EventSourcedAggregateRepository, InvalidAggregateRootVersion} from './index.js';
 import {Order, type OrderStream} from './order.stubs.js';
 
 const guardedTable = 'test__es_order_events';
@@ -224,6 +224,16 @@ describe.each([
             expect(beforeShipping.aggregateRootVersion()).toEqual(2);
             expect(beforeShipping.currentState().shipped).toBe(false);
             expect(beforeShipping.currentState().items).toEqual({'sku-1': 2});
+        });
+
+        test.each([
+            ['a negative version', -1],
+            ['a fractional version', 1.5],
+            ['NaN', Number.NaN],
+        ])('refuses to reconstitute the aggregate at %s', async (_description, version) => {
+            await repository.persist(Order.place(orderId, 'frank', 100));
+
+            await expect(repository.retrieveAtVersion(orderId, version)).rejects.toThrow(InvalidAggregateRootVersion);
         });
 
         test('skips an event type it has no handler for and keeps the version sequence', async () => {

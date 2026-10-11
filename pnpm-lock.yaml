@@ -180,6 +180,9 @@ importers:
       '@deltic/clock':
         specifier: workspace:^
         version: link:../clock
+      '@deltic/error-standard':
+        specifier: workspace:^
+        version: link:../error-standard
       '@deltic/messaging':
         specifier: workspace:^
         version: link:../messaging
