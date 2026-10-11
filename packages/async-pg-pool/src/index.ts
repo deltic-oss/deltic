@@ -25,6 +25,16 @@ interface ConnectionSupervision {
     releasing: boolean;
     handedBack: boolean;
     handBack: PoolClient['release'];
+    /**
+     * How the most recent transaction on this connection ended. What it exists for: the manual
+     * `try { commit } catch (e) { rollback(trx, e) }` pattern. When the commit itself failed, the
+     * transaction is already finalised by the time the compensating rollback arrives — the rollback
+     * asks for something that is already true, and must not replace the commit's error with a
+     * bookkeeping complaint. Only that case is forgiven: a rollback after a successful commit wants
+     * to undo work that is already committed, and a second rollback usually means two owners think
+     * the transaction is theirs — both must stay loud.
+     */
+    transactionOutcome?: 'committed' | 'rolled-back' | 'commit-failed';
 }
 
 export interface Connection extends Omit<PoolClient, 'release'> {
@@ -206,11 +216,27 @@ export class AsyncPgPool {
 
     async runInIsolation<R>(fn: () => Promise<R>): Promise<R> {
         return this.context.run(async () => {
+            let result: R;
+
             try {
-                return await fn();
-            } finally {
-                await this.flush();
+                result = await fn();
+            } catch (e) {
+                // The flush still runs — the isolated scope must not leak connections — but its
+                // complaint must not replace the unit of work's own failure. The two are usually
+                // correlated: a unit of work that threw before committing leaves the very open
+                // transaction the flush would report.
+                try {
+                    await this.flush();
+                } catch {
+                    // reported through the unit of work's error below
+                }
+
+                throw e;
             }
+
+            await this.flush();
+
+            return result;
         }, {
             async_pg_pool: asyncPoolContext(),
         });
@@ -271,16 +297,29 @@ export class AsyncPgPool {
         }
 
         const transaction = await this.begin();
+        let response: R;
 
         try {
-            const response = await fn();
-            await this.commit(transaction);
-
-            return response;
+            response = await fn();
         } catch (e) {
-            await this.rollback(transaction, e);
+            // Only a failure of the unit of work is compensated with a rollback. Catching wider
+            // than that meant a failing COMMIT — or a failing release hook after one — was answered
+            // with a rollback of a transaction that was already finalised, and the caller received
+            // that bookkeeping complaint instead of the error that mattered. SQLSTATE-driven retry
+            // loops never saw their serialization failures because of it.
+            try {
+                await this.rollback(transaction, e);
+            } catch {
+                // The unit of work's own failure is what the caller must see. The rollback's
+                // failure has already condemned the connection, which is all it can usefully do.
+            }
+
             throw e;
         }
+
+        await this.commit(transaction);
+
+        return response;
     }
 
     wasFlushed(): boolean {
@@ -613,18 +652,37 @@ export class AsyncPgPool {
         const context = this.resolveContext();
 
         if (context.sharedTransaction !== client) {
+            // A failed commit already finalised the transaction without committing it. The
+            // compensating rollback of the `try commit, catch rollback` pattern is then asking for
+            // what is already the case, and refusing it would bury the error that made the commit
+            // fail. Only that case is forgiven — see `transactionOutcome`.
+            if (command === 'ROLLBACK' && supervisionIfAny(client)?.transactionOutcome === 'commit-failed') {
+                return;
+            }
+
             throw new Error(`Trying to ${command} a transaction that is NOT the known transaction.`);
         }
 
-        // Whatever happens from here, this transaction is over.
+        // Whatever happens from here, this transaction is over, and until the command proves
+        // otherwise it ended in failure.
         context.sharedTransaction = undefined;
+        supervisionOf(client).transactionOutcome = command === 'ROLLBACK' ? 'rolled-back' : 'commit-failed';
+        let discarded = false;
 
         try {
-            await client.query(command);
+            // The command tag reports what the server actually did. A COMMIT sent to a transaction
+            // that failed earlier is answered with `ROLLBACK`: every statement in it was discarded.
+            // The tag is the only place that distinction exists — the query itself succeeds.
+            const result = await client.query(command);
+            discarded = command === 'COMMIT' && result.command !== 'COMMIT';
 
-            // A finalised transaction leaves a clean session, whatever the unit of work threw. An
-            // error that concerns the connection makes the command itself fail, which destroys the
-            // connection below.
+            if (command === 'COMMIT' && !discarded) {
+                supervisionOf(client).transactionOutcome = 'committed';
+            }
+
+            // A finalised transaction leaves a clean session, whatever the unit of work threw, and
+            // so does a COMMIT the server discarded. An error that concerns the connection makes the
+            // command itself fail, which destroys the connection below.
             await this.release(client);
         } catch (e) {
             // The release above may already have handed the connection back before failing; only
@@ -637,6 +695,10 @@ export class AsyncPgPool {
             throw e;
         } finally {
             await context.transactionAccess.unlock();
+        }
+
+        if (discarded) {
+            throw UnableToCommitTransaction.becauseTheServerDiscardedIt();
         }
     }
 
@@ -784,6 +846,15 @@ class UnableToReleaseConnection extends StandardError {
         new UnableToReleaseConnection(
             'Unable to release connection: it was not claimed through this pool',
             'async-pg-pool.connection_not_supervised',
+        );
+}
+
+export class UnableToCommitTransaction extends StandardError {
+    static becauseTheServerDiscardedIt = () =>
+        new UnableToCommitTransaction(
+            'Unable to commit: the transaction had already failed, so the server discarded it instead of committing. '
+                + 'Every statement in it was rolled back. A statement failed earlier and its error was swallowed.',
+            'async-pg-pool.transaction_discarded_on_commit',
         );
 }
 

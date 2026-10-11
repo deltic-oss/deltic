@@ -108,6 +108,23 @@ Nested calls to `runInTransaction` reuse the existing transaction.
 
 Inside a transaction, `primary()` hands out the transaction's connection. Code that releases what it got from `primary()` needs no special case for that: `release()` leaves the active transaction's connection alone, as it does the primary connection, and the pool hands it back once the transaction is committed or rolled back.
 
+#### Transaction outcomes are verified
+
+`commit()` believes the server, not the query. When a statement inside a transaction failed and its
+error was handled by the caller — an upsert conflict caught by hand, for instance — PostgreSQL has
+already aborted the transaction, and a `COMMIT` sent to it is answered with a `ROLLBACK` command
+tag: every statement in it is discarded, while the COMMIT query itself succeeds. `commit()` inspects
+that tag and rejects with `UnableToCommitTransaction`, so lost work is reported instead of being
+mistaken for success.
+
+Errors keep their identity through the transaction helpers. A failing `COMMIT` — a deferred
+constraint, a serialization failure — reaches the caller as itself, with its SQLSTATE `code` intact,
+so retry-on-`40001` loops work. A failing `ROLLBACK` never replaces the error that made the unit of
+work fail. And the manual pattern above is safe: a compensating `rollback()` after a commit that
+failed is a no-op, because the transaction already ended without committing. A rollback after a
+*successful* commit, or a second rollback, still throws — both mean the caller wants something that
+can no longer be true.
+
 #### Custom Isolation Levels
 
 ```typescript
