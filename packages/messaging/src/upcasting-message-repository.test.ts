@@ -171,7 +171,7 @@ describe('UpcastingMessageRepository', () => {
             ]);
 
             // act
-            const paginated = await collect(repository.paginateIds({limit: 10, whichMessage: 'last'}));
+            const paginated = await collect(repository.paginateIds({limit: 10, afterId: undefined, whichMessage: 'last'}));
 
             // assert
             expect(paginated.map(p => p.id)).toEqual(['agg-1', 'agg-2']);

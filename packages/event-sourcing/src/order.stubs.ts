@@ -30,7 +30,7 @@ export interface OrderStream extends AggregateStreamWithSnapshotting<OrderStream
          * like this is a mistake a consumer can easily make, because the type system
          * happily accepts it.
          */
-        delivery_was_scheduled: {scheduled_for: Date};
+        delivery_was_scheduled: {scheduled_for: number};
     };
     snapshot: OrderState;
 }
@@ -80,7 +80,7 @@ export class Order
     }
 
     scheduleDelivery(scheduledFor: Date): void {
-        this.recordThat('delivery_was_scheduled', {scheduled_for: scheduledFor});
+        this.recordThat('delivery_was_scheduled', {scheduled_for: scheduledFor.getTime()});
     }
 
     ship(carrier: string, trackingNumber: string): void {
