@@ -183,6 +183,32 @@ const repository = new AggregateRepositoryWithProjector<OrderStream>(
 await repository.persist(order);
 ```
 
+### Storing events in PostgreSQL
+
+`MessageRepositoryUsingPg` (`@deltic/messaging/pg/message-repository`) keeps the events of a stream
+in a table of their own, read back per aggregate in version order:
+
+```sql
+CREATE TABLE order_events (
+    id BIGSERIAL PRIMARY KEY,
+    aggregate_root_id UUID NOT NULL,
+    version INTEGER NOT NULL,
+    event_type VARCHAR(255) NOT NULL,
+    payload JSONB NOT NULL
+);
+
+CREATE INDEX order_events_reconstitution ON order_events (aggregate_root_id, version);
+```
+
+For tenant-scoped streams, add a `tenant_id` column and put it first in the index.
+
+`persist()` appends after the version the aggregate was retrieved at. Two processes handling a
+command for the same aggregate at the same time both append version *n + 1*, and both events are
+kept: the stream holds two events with that version, and every replay applies both. The index is a
+plain one on purpose. A unique index would fail the second `persist()` and roll its work back, and a
+duplicate version is better than lost events. To keep writers from overlapping, serialise commands
+per aggregate, for instance with the locking middleware of `@deltic/service-dispatcher`.
+
 ### Testing Aggregates
 
 `createTestTooling` sets up an in-memory repository for one aggregate and given/when/then helpers:
