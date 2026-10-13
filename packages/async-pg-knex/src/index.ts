@@ -195,15 +195,28 @@ export class AsyncKnexConnectionProvider implements ConnectionProvider {
 
         const trx = await this.begin();
 
-        try {
-            const result = await fn();
-            await this.commit(trx);
+        let result: R;
 
-            return result;
+        try {
+            result = await fn();
         } catch (e) {
-            await this.rollback(trx, e);
+            // Only a failure of the unit of work is compensated with a rollback. Catching the
+            // commit as well meant its failure was answered with a rollback of a transaction that
+            // was already finalised, and the caller received that bookkeeping complaint instead of
+            // the error that made the commit fail.
+            try {
+                await this.rollback(trx, e);
+            } catch {
+                // The unit of work's own failure is what the caller must see. The rollback's
+                // failure has already condemned the connection, which is all it can usefully do.
+            }
+
             throw e;
         }
+
+        await this.commit(trx);
+
+        return result;
     }
 
     /**
