@@ -12,6 +12,7 @@ import {
 } from './index.js';
 import {pgTestCredentials} from '../../pg-credentials.js';
 import {
+    CamelCasePlugin,
     PostgresAdapter,
     PostgresQueryCompiler,
     sql,
@@ -35,6 +36,14 @@ interface DeferredTable {
 interface DB {
     async_kysely_accounts: AccountsTable;
     async_kysely_deferred: DeferredTable;
+}
+
+interface CamelDB {
+    asyncKyselyAccounts: {
+        id: Generated<number>;
+        holderName: string;
+        balance: number;
+    };
 }
 
 const createTables = `
@@ -456,4 +465,239 @@ describe('AsyncKyselyConnectionProvider — usage scenarios', () => {
     });
 
     // -- Kysely's own transaction API stays blocked --
+
+    describe('kysely transaction guard', () => {
+        test('a derived instance still refuses Kysely transactions', async () => {
+            await expect(provider.connection()
+                .withSchema('public')
+                .transaction()
+                .execute(async () => undefined),
+            ).rejects.toThrow(KyselyTransactionsNotSupported);
+        });
+
+        test('a plugin-derived instance still refuses Kysely transactions', async () => {
+            await expect(provider.connection()
+                .withPlugin(new CamelCasePlugin())
+                .transaction()
+                .execute(async () => undefined),
+            ).rejects.toThrow(KyselyTransactionsNotSupported);
+        });
+
+    });
+
+    // -- Provider lifecycle --
+
+    describe('provider lifecycle', () => {
+        test('queries are refused after destroy', async () => {
+            await provider.connection().selectFrom('async_kysely_accounts').selectAll().execute();
+            await provider.destroy();
+
+            await expect(provider.connection()
+                .selectFrom('async_kysely_accounts')
+                .selectAll()
+                .execute(),
+            ).rejects.toThrow('driver has already been destroyed');
+        });
+
+        test('destroy is idempotent', async () => {
+            await provider.connection().selectFrom('async_kysely_accounts').selectAll().execute();
+
+            await provider.destroy();
+            await expect(provider.destroy()).resolves.toBeUndefined();
+        });
+    });
+
+    // -- Result mapping --
+
+    describe('result mapping', () => {
+        test('a merge reports the number of affected rows', async () => {
+            await provider.connection()
+                .insertInto('async_kysely_accounts')
+                .values({holder_name: 'Frank', balance: 10})
+                .execute();
+
+            const result = await sql`
+                MERGE INTO async_kysely_accounts AS target
+                USING (VALUES ('Frank', 25)) AS source(holder_name, balance)
+                ON target.holder_name = source.holder_name
+                WHEN MATCHED THEN UPDATE SET balance = source.balance
+                WHEN NOT MATCHED THEN INSERT (holder_name, balance)
+                    VALUES (source.holder_name, source.balance)
+            `.execute(provider.connection());
+
+            expect(result.numAffectedRows).toBe(1n);
+
+            const updated = await provider.connection()
+                .selectFrom('async_kysely_accounts')
+                .select(['balance'])
+                .executeTakeFirstOrThrow();
+            expect(updated.balance).toBe(25);
+        });
+
+        test('an insert that hits a conflict reports zero affected rows', async () => {
+            await provider.connection()
+                .insertInto('async_kysely_accounts')
+                .values({holder_name: 'Frank', balance: 10})
+                .execute();
+
+            const result = await provider.connection()
+                .insertInto('async_kysely_accounts')
+                .values({holder_name: 'Frank', balance: 99})
+                .onConflict((oc) => oc.column('holder_name').doNothing())
+                .executeTakeFirstOrThrow();
+
+            expect(result.numInsertedOrUpdatedRows).toBe(0n);
+        });
+
+        test('an update matching nothing reports zero affected rows', async () => {
+            const result = await provider.connection()
+                .updateTable('async_kysely_accounts')
+                .set({balance: 5})
+                .where('holder_name', '=', 'nobody')
+                .executeTakeFirstOrThrow();
+
+            expect(result.numUpdatedRows).toBe(0n);
+        });
+
+        test('schema changes participate in the transaction', async () => {
+            await expect(provider.runInTransaction(async () => {
+                await provider.connection().schema
+                    .createTable('async_kysely_ddl_probe')
+                    .addColumn('id', 'serial', (column) => column.primaryKey())
+                    .execute();
+                throw new Error('deliberate rollback');
+            })).rejects.toThrow('deliberate rollback');
+
+            const exists = await pool.query<{reg: string | null}>(
+                'SELECT to_regclass($1) AS reg',
+                ['async_kysely_ddl_probe'],
+            );
+            expect(exists.rows[0].reg).toBeNull();
+        });
+    });
+
+    // -- Security --
+
+    describe('security', () => {
+        test('interpolated values are bound, not inlined', async () => {
+            await provider.connection()
+                .insertInto('async_kysely_accounts')
+                .values({holder_name: 'Frank', balance: 1})
+                .execute();
+
+            const payload = 'Frank\'; DROP TABLE async_kysely_accounts; --';
+            const result = await sql<{holder_name: string}>`
+                SELECT holder_name FROM async_kysely_accounts WHERE holder_name = ${payload}
+            `.execute(provider.connection());
+
+            expect(result.rows).toEqual([]);
+            await expect(provider.connection()
+                .selectFrom('async_kysely_accounts')
+                .selectAll()
+                .execute(),
+            ).resolves.toHaveLength(1);
+        });
+
+        test('schema names are escaped as identifiers', async () => {
+            await expect(provider.connection()
+                .withSchema('public"; DROP TABLE async_kysely_accounts; --')
+                .selectFrom('async_kysely_accounts')
+                .selectAll()
+                .execute(),
+            ).rejects.toThrow('does not exist');
+
+            const exists = await pool.query<{reg: string | null}>(
+                'SELECT to_regclass($1) AS reg',
+                ['async_kysely_accounts'],
+            );
+            expect(exists.rows[0].reg).toBe('async_kysely_accounts');
+        });
+
+        test('dynamically referenced columns are escaped as identifiers', async () => {
+            const db = provider.connection();
+            const payload = 'holder_name" FROM async_kysely_accounts; DROP TABLE async_kysely_accounts; --';
+
+            await expect(db.selectFrom('async_kysely_accounts')
+                .select(db.dynamic.ref(payload) as never)
+                .execute(),
+            ).rejects.toThrow('does not exist');
+
+            const exists = await pool.query<{reg: string | null}>(
+                'SELECT to_regclass($1) AS reg',
+                ['async_kysely_accounts'],
+            );
+            expect(exists.rows[0].reg).toBe('async_kysely_accounts');
+        });
+
+        test('query failures do not disclose the statement or its parameters', async () => {
+            await provider.connection()
+                .insertInto('async_kysely_accounts')
+                .values({holder_name: 'confidential-holder', balance: 1})
+                .execute();
+
+            try {
+                await provider.connection()
+                    .insertInto('async_kysely_accounts')
+                    .values({holder_name: 'confidential-holder', balance: 2})
+                    .execute();
+                expect.fail('the duplicate insert should have failed');
+            } catch (error) {
+                const message = (error as Error).message;
+
+                expect(message).toContain('duplicate key value');
+                expect(message).not.toContain('confidential-holder');
+                expect(message).not.toContain('insert into');
+            }
+        });
+    });
+
+    // -- Options are applied to every instance the provider hands out --
+
+    describe('provider options', () => {
+        test('plugins apply to lazy and transaction bound instances alike', async () => {
+            const camelProvider = new AsyncKyselyConnectionProvider<CamelDB>(asyncPool, {
+                plugins: [new CamelCasePlugin()],
+            });
+
+            await camelProvider.connection()
+                .insertInto('asyncKyselyAccounts')
+                .values({holderName: 'Frank', balance: 10})
+                .execute();
+
+            const lazy = await camelProvider.connection()
+                .selectFrom('asyncKyselyAccounts')
+                .select(['holderName', 'balance'])
+                .executeTakeFirstOrThrow();
+            expect(lazy).toEqual({holderName: 'Frank', balance: 10});
+
+            const trx = await camelProvider.begin();
+            const bound = await trx.selectFrom('asyncKyselyAccounts')
+                .select(['holderName'])
+                .executeTakeFirstOrThrow();
+            expect(bound).toEqual({holderName: 'Frank'});
+            await camelProvider.commit(trx);
+        });
+
+        test('the log config applies to lazy and transaction bound instances alike', async () => {
+            const statements: string[] = [];
+            const loggingProvider = new AsyncKyselyConnectionProvider<DB>(asyncPool, {
+                log: (event) => {
+                    statements.push(event.query.sql);
+                },
+            });
+
+            await loggingProvider.connection()
+                .insertInto('async_kysely_accounts')
+                .values({holder_name: 'Frank', balance: 1})
+                .execute();
+
+            const trx = await loggingProvider.begin();
+            await trx.selectFrom('async_kysely_accounts').selectAll().execute();
+            await loggingProvider.commit(trx);
+
+            expect(statements).toHaveLength(2);
+            expect(statements[0]).toContain('insert into "async_kysely_accounts"');
+            expect(statements[1]).toContain('select * from "async_kysely_accounts"');
+        });
+    });
 });
